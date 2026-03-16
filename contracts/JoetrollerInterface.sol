@@ -137,4 +137,6 @@ interface JoetrollerInterfaceExtension {
         uint256 amount,
         bytes calldata params
     ) external view returns (bool);
+
+    function trustedLiquidator() external view returns (address);
 }

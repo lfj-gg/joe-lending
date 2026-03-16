@@ -339,6 +339,8 @@ contract JErc20Interface is JErc20Storage {
 
     function redeem(uint256 redeemTokens) external returns (uint256);
 
+    function redeemOnBehalf(address redeemer, uint256 redeemTokens) external returns (uint256);
+
     function redeemUnderlying(uint256 redeemAmount) external returns (uint256);
 
     function borrow(uint256 borrowAmount) external returns (uint256);
