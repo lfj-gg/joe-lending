@@ -111,4 +111,7 @@ contract JoetrollerV1Storage is UnitrollerAdminStorage {
 
     // @notice rewardDistributor The module that handles reward distribution.
     address payable public rewardDistributor;
+
+    // @notice trusted liquidator can liquidate any position without checks
+    address public trustedLiquidator;
 }
