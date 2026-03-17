@@ -9,16 +9,29 @@ import {TrustedLiquidator} from "../../contracts/TrustedLiquidator/TrustedLiquid
 
 interface IJoetroller {
     function admin() external view returns (address);
+    function trustedLiquidator() external view returns (address);
     function _setTrustedLiquidator(address newTrustedLiquidator) external returns (uint256);
     function _setPendingImplementation(address newPendingImplementation) external returns (uint256);
     function _become(address joetroller) external;
+    function liquidateBorrowAllowed(
+        address jTokenBorrowed,
+        address jTokenCollateral,
+        address liquidator,
+        address borrower,
+        uint256 repayAmount
+    ) external returns (uint256);
 }
 
 interface IJToken {
     function _setImplementation(address implementation_, bool allowResign, bytes memory becomeImplementationData)
         external;
+    function balanceOf(address account) external view returns (uint256);
     function balanceOfUnderlying(address account) external returns (uint256);
     function borrowBalanceCurrent(address account) external returns (uint256);
+    function mint(uint256 mintAmount) external returns (uint256);
+    function redeem(uint256 redeemTokens) external returns (uint256);
+    function redeemOnBehalf(address redeemer, uint256 redeemTokens) external returns (uint256);
+    function repayBorrow(uint256 repayAmount) external returns (uint256);
 }
 
 contract TrustedLiquidatorTest is Test {
@@ -55,23 +68,21 @@ contract TrustedLiquidatorTest is Test {
         vm.startPrank(admin);
         joetroller._setPendingImplementation(newJoetroller);
         IJoetroller(newJoetroller)._become(address(joetroller));
-
         IJToken(JMIM)._setImplementation(newJmim, false, "");
-
         joetroller._setTrustedLiquidator(address(liquidator));
         vm.stopPrank();
     }
+
+    // -- TrustedLiquidator functional tests --
 
     function test_RedeemOnBehalf() public {
         uint256 mimBalance = IERC20(MIM).balanceOf(USER_DEPOSITED_MIM);
         uint256 underlyingBalance = IJToken(JMIM).balanceOfUnderlying(USER_DEPOSITED_MIM);
         uint256 jmimBalance = IERC20(JMIM).balanceOf(USER_DEPOSITED_MIM);
-
         assertGt(jmimBalance, 0, "test_RedeemOnBehalf::1");
 
-        vm.startPrank(admin);
+        vm.prank(admin);
         liquidator.redeemOnBehalf(JMIM, USER_DEPOSITED_MIM);
-        vm.stopPrank();
 
         assertEq(IERC20(JMIM).balanceOf(USER_DEPOSITED_MIM), 0, "test_RedeemOnBehalf::2");
         assertEq(IERC20(MIM).balanceOf(USER_DEPOSITED_MIM), mimBalance + underlyingBalance, "test_RedeemOnBehalf::3");
@@ -83,14 +94,12 @@ contract TrustedLiquidatorTest is Test {
         uint256 snapshot = vm.snapshotState();
         uint256 borrowed = IJToken(JMIM).borrowBalanceCurrent(USER_BORROWED_MIM);
         vm.revertToState(snapshot);
-
         assertGt(borrowed, 0, "test_Liquidate::1");
 
         deal(MIM, address(liquidator), borrowed);
 
-        vm.startPrank(admin);
+        vm.prank(admin);
         liquidator.liquidate(JMIM, JBTC, USER_BORROWED_MIM);
-        vm.stopPrank();
 
         assertLt(IERC20(JBTC).balanceOf(USER_BORROWED_MIM), jbtcBalance, "test_Liquidate::2");
         assertEq(IJToken(JMIM).borrowBalanceCurrent(USER_BORROWED_MIM), 0, "test_Liquidate::3");
@@ -103,14 +112,12 @@ contract TrustedLiquidatorTest is Test {
         uint256 snapshot = vm.snapshotState();
         uint256 borrowed = IJToken(JMIM).borrowBalanceCurrent(USER_MIM_BAD_DEBT);
         vm.revertToState(snapshot);
-
         assertGt(borrowed, 0, "test_RepayBorrowBehalf::1");
 
         deal(MIM, address(liquidator), borrowed);
 
-        vm.startPrank(admin);
+        vm.prank(admin);
         liquidator.repayBorrowBehalf(JMIM, USER_MIM_BAD_DEBT);
-        vm.stopPrank();
 
         assertEq(IJToken(JMIM).borrowBalanceCurrent(USER_MIM_BAD_DEBT), 0, "test_RepayBorrowBehalf::3");
         assertEq(IERC20(MIM).balanceOf(USER_MIM_BAD_DEBT), mimBalance, "test_RepayBorrowBehalf::4");
@@ -122,7 +129,6 @@ contract TrustedLiquidatorTest is Test {
         uint256 snapshot = vm.snapshotState();
         uint256 borrowedUsdc = IJToken(JUSDC).borrowBalanceCurrent(USER_BORROWED_AGAINST_MIM);
         vm.revertToState(snapshot);
-
         assertGt(borrowedUsdc, 0, "test_LiquidateOtherTokens::1");
 
         deal(USDC, address(liquidator), borrowedUsdc);
@@ -135,5 +141,228 @@ contract TrustedLiquidatorTest is Test {
         assertEq(IJToken(JUSDC).borrowBalanceCurrent(USER_BORROWED_AGAINST_MIM), 0, "test_LiquidateOtherTokens::3");
         assertGt(IERC20(MIM).balanceOf(address(liquidator)), 0, "test_LiquidateOtherTokens::4");
         assertGt(IERC20(MIM).balanceOf(USER_BORROWED_AGAINST_MIM), mimBalance, "test_LiquidateOtherTokens::5");
+    }
+
+    function test_TransferWorks() public {
+        uint256 amount = 1000e18;
+        deal(MIM, address(liquidator), amount);
+        address recipient = makeAddr("recipient");
+
+        vm.prank(admin);
+        liquidator.transfer(MIM, recipient, amount);
+
+        assertEq(IERC20(MIM).balanceOf(recipient), amount, "test_TransferWorks::1");
+        assertEq(IERC20(MIM).balanceOf(address(liquidator)), 0, "test_TransferWorks::2");
+    }
+
+    function test_TransferZeroMeansAll() public {
+        uint256 amount = 1000e18;
+        deal(MIM, address(liquidator), amount);
+        address recipient = makeAddr("recipient");
+
+        vm.prank(admin);
+        liquidator.transfer(MIM, recipient, 0);
+
+        assertEq(IERC20(MIM).balanceOf(recipient), amount, "test_TransferZeroMeansAll::1");
+    }
+
+    function test_MulticallBatchWorks() public {
+        uint256 snapshot = vm.snapshotState();
+        uint256 borrowed = IJToken(JMIM).borrowBalanceCurrent(USER_BORROWED_MIM);
+        vm.revertToState(snapshot);
+
+        deal(MIM, address(liquidator), borrowed);
+
+        bytes[] memory calls = new bytes[](1);
+        calls[0] = abi.encodeCall(TrustedLiquidator.liquidate, (JMIM, JBTC, USER_BORROWED_MIM));
+
+        vm.prank(admin);
+        liquidator.multicall(calls);
+
+        assertEq(IJToken(JMIM).borrowBalanceCurrent(USER_BORROWED_MIM), 0, "test_MulticallBatchWorks::1");
+        assertGt(IERC20(BTC).balanceOf(address(liquidator)), 0, "test_MulticallBatchWorks::2");
+    }
+
+    // -- TrustedLiquidator access control --
+
+    function test_LiquidateOnlyOwner() public {
+        vm.prank(makeAddr("random"));
+        vm.expectRevert();
+        liquidator.liquidate(JMIM, JBTC, USER_BORROWED_MIM);
+    }
+
+    function test_RedeemOnBehalfOnlyOwner() public {
+        vm.prank(makeAddr("random"));
+        vm.expectRevert();
+        liquidator.redeemOnBehalf(JMIM, USER_DEPOSITED_MIM);
+    }
+
+    function test_RepayBorrowBehalfOnlyOwner() public {
+        vm.prank(makeAddr("random"));
+        vm.expectRevert();
+        liquidator.repayBorrowBehalf(JMIM, USER_MIM_BAD_DEBT);
+    }
+
+    function test_TransferOnlyOwner() public {
+        vm.prank(makeAddr("random"));
+        vm.expectRevert();
+        liquidator.transfer(MIM, makeAddr("random"), 0);
+    }
+
+    function test_CallOnlyOwner() public {
+        vm.prank(makeAddr("random"));
+        vm.expectRevert();
+        liquidator.call(JMIM, 0, "");
+    }
+
+    function test_MulticallOnlyOwner() public {
+        bytes[] memory calls = new bytes[](1);
+        calls[0] = abi.encodeCall(TrustedLiquidator.redeemOnBehalf, (JMIM, USER_DEPOSITED_MIM));
+
+        vm.prank(makeAddr("random"));
+        vm.expectRevert();
+        liquidator.multicall(calls);
+    }
+
+    // -- Joetroller: _setTrustedLiquidator access control --
+
+    function test_SetTrustedLiquidator_OnlyAdmin() public {
+        address random = makeAddr("random");
+
+        vm.prank(random);
+        uint256 err = joetroller._setTrustedLiquidator(random);
+        assertNotEq(err, 0, "non-admin should fail");
+        assertEq(joetroller.trustedLiquidator(), address(liquidator), "state should not change");
+    }
+
+    function test_SetTrustedLiquidator_AdminSucceeds() public {
+        address newLiq = makeAddr("newLiq");
+
+        vm.prank(admin);
+        uint256 err = joetroller._setTrustedLiquidator(newLiq);
+        assertEq(err, 0, "admin call should succeed");
+        assertEq(joetroller.trustedLiquidator(), newLiq, "trustedLiquidator not updated");
+    }
+
+    function test_SetTrustedLiquidator_CanSetToZero() public {
+        vm.prank(admin);
+        uint256 err = joetroller._setTrustedLiquidator(address(0));
+        assertEq(err, 0, "should succeed");
+        assertEq(joetroller.trustedLiquidator(), address(0), "should be zero");
+    }
+
+    // -- JToken: redeemOnBehalf access control --
+
+    function test_RedeemOnBehalf_OnlyTrustedLiquidator() public {
+        uint256 balance = IJToken(JMIM).balanceOf(USER_DEPOSITED_MIM);
+        assertGt(balance, 0, "user should have jMIM");
+
+        vm.prank(makeAddr("random"));
+        uint256 err = IJToken(JMIM).redeemOnBehalf(USER_DEPOSITED_MIM, balance);
+        assertNotEq(err, 0, "non-trusted should fail");
+        assertEq(IJToken(JMIM).balanceOf(USER_DEPOSITED_MIM), balance, "balance should not change");
+    }
+
+    function test_RedeemOnBehalf_AdminCannotCallDirectly() public {
+        uint256 balance = IJToken(JMIM).balanceOf(USER_DEPOSITED_MIM);
+
+        vm.prank(admin);
+        uint256 err = IJToken(JMIM).redeemOnBehalf(USER_DEPOSITED_MIM, balance);
+        assertNotEq(err, 0, "admin direct call should fail");
+    }
+
+    // -- Trusted liquidator bypasses --
+
+    function test_TrustedLiquidator_BypassesShortfallCheck() public {
+        uint256 snapshot = vm.snapshotState();
+        uint256 borrowed = IJToken(JMIM).borrowBalanceCurrent(USER_BORROWED_MIM);
+        vm.revertToState(snapshot);
+        assertGt(borrowed, 0, "user should have borrow");
+
+        uint256 err = joetroller.liquidateBorrowAllowed(JMIM, JBTC, address(liquidator), USER_BORROWED_MIM, borrowed);
+        assertEq(err, 0, "trusted liquidator should be allowed");
+    }
+
+    function test_TrustedLiquidator_BypassesCloseFactorLimit() public {
+        uint256 snapshot = vm.snapshotState();
+        uint256 borrowed = IJToken(JMIM).borrowBalanceCurrent(USER_BORROWED_MIM);
+        vm.revertToState(snapshot);
+        assertGt(borrowed, 0, "user should have borrow");
+
+        uint256 err = joetroller.liquidateBorrowAllowed(JMIM, JBTC, address(liquidator), USER_BORROWED_MIM, borrowed);
+        assertEq(err, 0, "full repay as trusted should succeed");
+    }
+
+    function test_RegularLiquidator_StillHasShortfallCheck() public {
+        uint256 err = joetroller.liquidateBorrowAllowed(JMIM, JUSDC, makeAddr("random"), USER_DEPOSITED_MIM, 1);
+        assertNotEq(err, 0, "regular should not bypass shortfall");
+    }
+
+    function test_RegularLiquidator_StillHasCloseFactorLimit() public {
+        uint256 snapshot = vm.snapshotState();
+        uint256 borrowed = IJToken(JMIM).borrowBalanceCurrent(USER_BORROWED_MIM);
+        vm.revertToState(snapshot);
+
+        uint256 err = joetroller.liquidateBorrowAllowed(JMIM, JBTC, makeAddr("random"), USER_BORROWED_MIM, borrowed);
+        assertNotEq(err, 0, "regular should not bypass close factor");
+    }
+
+    // -- Market operations post-upgrade --
+
+    function test_SupplyAndRedeem_WorksAfterUpgrade() public {
+        address supplier = makeAddr("supplier");
+        uint256 mintAmount = 100e6;
+
+        deal(USDC, supplier, mintAmount);
+
+        vm.startPrank(supplier);
+        IERC20(USDC).approve(JUSDC, mintAmount);
+        uint256 mintErr = IJToken(JUSDC).mint(mintAmount);
+        vm.stopPrank();
+        assertEq(mintErr, 0, "mint should succeed");
+
+        uint256 jTokenBalance = IJToken(JUSDC).balanceOf(supplier);
+        assertGt(jTokenBalance, 0, "should have jTokens");
+
+        vm.prank(supplier);
+        uint256 redeemErr = IJToken(JUSDC).redeem(jTokenBalance);
+        assertEq(redeemErr, 0, "redeem should succeed");
+        assertEq(IJToken(JUSDC).balanceOf(supplier), 0, "should have 0 jTokens");
+        assertGt(IERC20(USDC).balanceOf(supplier), 0, "should have USDC back");
+    }
+
+    function test_BorrowAndRepay_WorksAfterUpgrade() public {
+        uint256 snapshot = vm.snapshotState();
+        uint256 borrowed = IJToken(JMIM).borrowBalanceCurrent(USER_BORROWED_MIM);
+        vm.revertToState(snapshot);
+        assertGt(borrowed, 0, "should have borrow");
+
+        deal(MIM, USER_BORROWED_MIM, borrowed);
+
+        vm.startPrank(USER_BORROWED_MIM);
+        IERC20(MIM).approve(JMIM, borrowed);
+        uint256 repayErr = IJToken(JMIM).repayBorrow(borrowed);
+        vm.stopPrank();
+        assertEq(repayErr, 0, "repay should succeed");
+        assertEq(IJToken(JMIM).borrowBalanceCurrent(USER_BORROWED_MIM), 0, "borrow should be zero");
+    }
+
+    // -- Edge cases: trusted liquidator removed --
+
+    function test_RemovedTrustedLiquidator_CannotAct() public {
+        vm.prank(admin);
+        joetroller._setTrustedLiquidator(address(0));
+
+        vm.prank(admin);
+        vm.expectRevert();
+        liquidator.redeemOnBehalf(JMIM, USER_DEPOSITED_MIM);
+    }
+
+    function test_RemovedTrustedLiquidator_RegularLiquidationUnchanged() public {
+        vm.prank(admin);
+        joetroller._setTrustedLiquidator(address(0));
+
+        uint256 err = joetroller.liquidateBorrowAllowed(JMIM, JUSDC, makeAddr("random"), USER_DEPOSITED_MIM, 1);
+        assertNotEq(err, 0, "should still enforce shortfall");
     }
 }

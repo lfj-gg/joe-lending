@@ -2,10 +2,11 @@
 
 pragma solidity ^0.8.20;
 
-import {Ownable} from "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
+import {Address} from "lib/openzeppelin-contracts/contracts/utils/Address.sol";
 import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Multicall} from "lib/openzeppelin-contracts/contracts/utils/Multicall.sol";
+import {Ownable} from "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
+import {SafeERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 
 interface JToken {
     function underlying() external view returns (address);
@@ -23,9 +24,10 @@ contract TrustedLiquidator is Ownable, Multicall {
     error LiquidateFailed(uint256 error, address jTokenBorrowed, address jTokenCollateral, address borrower);
     error RedeemFailed(uint256 error, address jTokenCollateral, address redeemer);
     error RepayBorrowFailed(uint256 error, address jToken, address borrower);
-    error CallFailed(address to, bytes data);
 
     constructor(address owner) Ownable(owner) {}
+
+    receive() external payable {}
 
     function liquidate(address jTokenBorrowed, address jTokenCollateral, address borrower) external onlyOwner {
         address underlying = JToken(jTokenBorrowed).underlying();
@@ -62,8 +64,7 @@ contract TrustedLiquidator is Ownable, Multicall {
         IERC20(token).safeTransfer(to, amount);
     }
 
-    function call(address to, bytes calldata data) external onlyOwner {
-        (bool success, ) = to.call(data);
-        if (!success) revert CallFailed(to, data);
+    function call(address to, uint256 value, bytes calldata data) external onlyOwner {
+        Address.functionCallWithValue(to, data, value);
     }
 }
