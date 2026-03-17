@@ -5,6 +5,7 @@ pragma solidity ^0.8.20;
 import {Ownable} from "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Multicall} from "lib/openzeppelin-contracts/contracts/utils/Multicall.sol";
 
 interface JToken {
     function underlying() external view returns (address);
@@ -16,7 +17,7 @@ interface JToken {
     function repayBorrowBehalf(address borrower, uint256 repayAmount) external returns (uint256);
 }
 
-contract TrustedLiquidator is Ownable {
+contract TrustedLiquidator is Ownable, Multicall {
     using SafeERC20 for IERC20;
 
     error LiquidateFailed(uint256 error, address jTokenBorrowed, address jTokenCollateral, address borrower);
