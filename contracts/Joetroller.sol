@@ -48,6 +48,12 @@ contract Joetroller is JoetrollerV1Storage, JoetrollerInterface, JoetrollerError
     /// @notice Emitted when trusted liquidator is changed by admin
     event NewTrustedLiquidator(address oldTrustedLiquidator, address newTrustedLiquidator);
 
+    /// @notice Emitted when trusted liquidator's liquidation incentive is changed by admin
+    event NewTrustedLiquidationIncentiveMantissa(
+        uint256 oldTrustedLiquidationIncentiveMantissa,
+        uint256 newTrustedLiquidationIncentiveMantissa
+    );
+
     /// @notice Emitted when an action is paused globally
     event ActionPaused(string action, bool pauseState);
 
@@ -995,6 +1001,15 @@ contract Joetroller is JoetrollerV1Storage, JoetrollerInterface, JoetrollerError
         address jTokenCollateral,
         uint256 actualRepayAmount
     ) external view returns (uint256, uint256) {
+        return liquidateCalculateSeizeTokens(address(0), jTokenBorrowed, jTokenCollateral, actualRepayAmount);
+    }
+
+    function liquidateCalculateSeizeTokens(
+        address liquidator,
+        address jTokenBorrowed,
+        address jTokenCollateral,
+        uint256 actualRepayAmount
+    ) public view returns (uint256, uint256) {
         /* Read oracle prices for borrowed and collateral markets */
         uint256 priceBorrowedMantissa = oracle.getUnderlyingPrice(JToken(jTokenBorrowed));
         uint256 priceCollateralMantissa = oracle.getUnderlyingPrice(JToken(jTokenCollateral));
@@ -1010,7 +1025,7 @@ contract Joetroller is JoetrollerV1Storage, JoetrollerInterface, JoetrollerError
          */
         uint256 exchangeRateMantissa = JToken(jTokenCollateral).exchangeRateStored(); // Note: reverts on error
         Exp memory numerator = mul_(
-            Exp({mantissa: liquidationIncentiveMantissa}),
+            Exp({mantissa: _getLiquidationIncentiveMantissa(liquidator)}),
             Exp({mantissa: priceBorrowedMantissa})
         );
         Exp memory denominator = mul_(Exp({mantissa: priceCollateralMantissa}), Exp({mantissa: exchangeRateMantissa}));
@@ -1018,6 +1033,22 @@ contract Joetroller is JoetrollerV1Storage, JoetrollerInterface, JoetrollerError
         uint256 seizeTokens = mul_ScalarTruncate(ratio, actualRepayAmount);
 
         return (uint256(Error.NO_ERROR), seizeTokens);
+    }
+
+    /**
+     * @notice Get the liquidation incentive mantissa for the given liquidator
+     * @param liquidator The address of the liquidator
+     * @return The liquidation incentive mantissa
+     */
+    function _getLiquidationIncentiveMantissa(address liquidator) internal view returns (uint256) {
+        if (liquidator == address(0) || liquidator != trustedLiquidator) {
+            return liquidationIncentiveMantissa;
+        }
+        uint256 mantissa = trustedLiquidationIncentiveMantissa;
+        if (mantissa == 0) {
+            return liquidationIncentiveMantissa;
+        }
+        return mantissa;
     }
 
     /*** Admin Functions ***/
@@ -1304,7 +1335,7 @@ contract Joetroller is JoetrollerV1Storage, JoetrollerInterface, JoetrollerError
     }
 
     /**
-     * @notice Admin function to change the Trusted Liquidator
+     * @notice Admin function to change the Trusted Liquidator settings
      * @param newTrustedLiquidator The address of the new Trusted Liquidator
      * @return uint 0=success, otherwise a failure. (See enum Error for details)
     */
@@ -1322,6 +1353,28 @@ contract Joetroller is JoetrollerV1Storage, JoetrollerInterface, JoetrollerError
         // Emit NewTrustedLiquidator(OldTrustedLiquidator, NewTrustedLiquidator)
         emit NewTrustedLiquidator(oldTrustedLiquidator, trustedLiquidator);
 
+        return uint256(Error.NO_ERROR);
+    }
+
+    /**
+     * @notice Admin function to change the Trusted Liquidator's liquidation incentive
+     * @param newTrustedLiquidationIncentiveMantissa The new trusted liquidator's liquidation incentive
+     * @return uint 0=success, otherwise a failure. (See enum Error for details)
+    */
+    function _setTrustedLiquidationIncentiveMantissa(uint256 newTrustedLiquidationIncentiveMantissa) external returns (uint256) {
+        if (msg.sender != admin) {
+            return fail(Error.UNAUTHORIZED, FailureInfo.SET_TRUSTED_LIQUIDATION_INCENTIVE_OWNER_CHECK);
+        }
+        
+        // Save current value for inclusion in log
+        uint256 oldTrustedLiquidationIncentiveMantissa = trustedLiquidationIncentiveMantissa;
+
+        // Store trustedLiquidationIncentiveMantissa with value newTrustedLiquidationIncentiveMantissa
+        trustedLiquidationIncentiveMantissa = newTrustedLiquidationIncentiveMantissa;
+
+        // Emit NewTrustedLiquidationIncentiveMantissa(OldTrustedLiquidationIncentiveMantissa, NewTrustedLiquidationIncentiveMantissa)
+        emit NewTrustedLiquidationIncentiveMantissa(oldTrustedLiquidationIncentiveMantissa, trustedLiquidationIncentiveMantissa);
+        
         return uint256(Error.NO_ERROR);
     }
 

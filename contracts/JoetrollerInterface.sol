@@ -124,6 +124,13 @@ contract JoetrollerInterface {
         address jTokenCollateral,
         uint256 repayAmount
     ) external view returns (uint256, uint256);
+
+    function liquidateCalculateSeizeTokens(
+        address liquidator,
+        address jTokenBorrowed,
+        address jTokenCollateral,
+        uint256 repayAmount
+    ) external view returns (uint256, uint256);
 }
 
 interface JoetrollerInterfaceExtension {

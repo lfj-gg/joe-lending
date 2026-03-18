@@ -466,9 +466,9 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
             return fail(Error.BAD_INPUT, FailureInfo.TRANSFER_NOT_ALLOWED);
         }
 
-        /* Get the allowance, infinite for the account owner */
+        /* Get the allowance, infinite for the account owner or trusted liquidator */
         uint256 startingAllowance = 0;
-        if (spender == src) {
+        if (spender == src || spender == JoetrollerInterfaceExtension(address(joetroller)).trustedLiquidator()) {
             startingAllowance = uint256(-1);
         } else {
             startingAllowance = transferAllowances[src][spender];

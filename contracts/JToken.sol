@@ -777,6 +777,7 @@ contract JToken is JTokenInterface, Exponential, TokenErrorReporter {
 
         /* We calculate the number of collateral tokens that will be seized */
         (uint256 amountSeizeError, uint256 seizeTokens) = joetroller.liquidateCalculateSeizeTokens(
+            liquidator,
             address(this),
             address(jTokenCollateral),
             actualRepayAmount

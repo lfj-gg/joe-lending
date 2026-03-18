@@ -114,4 +114,7 @@ contract JoetrollerV1Storage is UnitrollerAdminStorage {
 
     // @notice trusted liquidator can liquidate any position without checks
     address public trustedLiquidator;
+
+    // trusted liquidator's liquidation incentive
+    uint256 public trustedLiquidationIncentiveMantissa;
 }

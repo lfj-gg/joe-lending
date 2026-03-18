@@ -63,20 +63,6 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
     }
 
     /**
-     * @notice Sender redeems jTokens in exchange for the underlying asset
-     * @dev Accrues interest whether or not the operation succeeds, unless reverted
-     * @param redeemer The address of the account which is redeeming the tokens
-     * @param redeemTokens The number of jTokens to redeem into underlying
-     * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
-     */
-    function redeemOnBehalf(address redeemer, uint256 redeemTokens) external returns (uint256) {
-        if (JoetrollerInterfaceExtension(address(joetroller)).trustedLiquidator() != msg.sender) {
-            return fail(Error.UNAUTHORIZED, FailureInfo.REDEEM_ON_BEHALF_NOT_TRUSTED_LIQUIDATOR);
-        }
-        return redeemInternal(redeemer, redeemTokens, false);
-    }
-
-    /**
      * @notice Sender redeems jTokens in exchange for a specified amount of underlying asset
      * @dev Accrues interest whether or not the operation succeeds, unless reverted
      * @param redeemAmount The amount of underlying to redeem
@@ -463,7 +449,7 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
 
         /* Get the allowance, infinite for the account owner */
         uint256 startingAllowance = 0;
-        if (spender == src) {
+        if (spender == src || spender == JoetrollerInterfaceExtension(address(joetroller)).trustedLiquidator()) {
             startingAllowance = uint256(-1);
         } else {
             startingAllowance = transferAllowances[src][spender];
