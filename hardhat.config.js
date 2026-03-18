@@ -11,6 +11,10 @@ require("hardhat-watcher");
 require("hardhat-contract-sizer");
 require("hardhat-storage-layout-diff");
 require("@openzeppelin/hardhat-upgrades");
+require("./tasks/dashboard");
+require("./tasks/positions");
+require("./tasks/actions");
+
 
 const { HardhatUserConfig } = require("hardhat/types");
 const { removeConsoleLog } = require("hardhat-preprocessor");
@@ -201,7 +205,9 @@ module.exports = {
     },
     avalanche: {
       url: "https://api.avax.network/ext/bc/C/rpc",
-      accounts,
+      accounts: process.env.DEPLOY_PRIVATE_KEY
+        ? [process.env.DEPLOY_PRIVATE_KEY]
+        : [],
       chainId: 43114,
       live: true,
       saveDeployments: true,
@@ -209,7 +215,9 @@ module.exports = {
     },
     fuji: {
       url: "https://api.avax-test.network/ext/bc/C/rpc",
-      accounts,
+      accounts: process.env.DEPLOY_PRIVATE_KEY
+        ? [process.env.DEPLOY_PRIVATE_KEY]
+        : [],
       chainId: 43113,
       live: true,
       saveDeployments: true,
@@ -270,6 +278,15 @@ module.exports = {
       },
       {
         version: "0.7.6",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200,
+          },
+        },
+      },
+      {
+        version: "0.8.20",
         settings: {
           optimizer: {
             enabled: true,
