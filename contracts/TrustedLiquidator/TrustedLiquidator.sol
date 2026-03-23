@@ -4,18 +4,32 @@ pragma solidity ^0.8.20;
 
 import {Address} from "lib/openzeppelin-contracts/contracts/utils/Address.sol";
 import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {Math} from "lib/openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Multicall} from "lib/openzeppelin-contracts/contracts/utils/Multicall.sol";
 import {Ownable} from "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 import {SafeERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 
 interface JToken {
     function underlying() external view returns (address);
+    function joetroller() external view returns (address);
     function balanceOf(address account) external view returns (uint256);
     function borrowBalanceCurrent(address account) external returns (uint256);
+    function exchangeRateCurrent() external returns (uint256);
     function liquidateBorrow(address borrower, uint256 repayAmount, JToken jTokenCollateral) external returns (uint256);
     function redeem(uint256 redeemTokens) external returns (uint256);
     function repayBorrowBehalf(address borrower, uint256 repayAmount) external returns (uint256);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
+}
+
+interface IJoetroller {
+    function oracle() external view returns (IPriceOracle);
+    function liquidationIncentiveMantissa() external view returns (uint256);
+    function trustedLiquidator() external view returns (address);
+    function trustedLiquidationIncentiveMantissa() external view returns (uint256);
+}
+
+interface IPriceOracle {
+    function getUnderlyingPrice(address jToken) external view returns (uint256);
 }
 
 interface IEscrow {
@@ -40,6 +54,7 @@ contract TrustedLiquidator is Ownable, Multicall {
     error LiquidateFailed(uint256 error, address jTokenBorrowed, address jTokenCollateral, address borrower);
     error RedeemFailed(uint256 error, address jTokenCollateral, address redeemer);
     error RepayBorrowFailed(uint256 error, address jToken, address borrower);
+    error RepayExceedsMax(uint256 balance, uint256 maxRepay, address jToken, address borrower);
 
     constructor(address owner) Ownable(owner) {}
 
@@ -55,16 +70,51 @@ contract TrustedLiquidator is Ownable, Multicall {
     /// @param borrower The address of the borrower to liquidate.
     function liquidate(address jTokenBorrowed, address jTokenCollateral, address borrower) external onlyOwner {
         address underlying = JToken(jTokenBorrowed).underlying();
-        uint256 borrowBalance = JToken(jTokenBorrowed).borrowBalanceCurrent(borrower);
+        
+        uint256 repay = JToken(jTokenBorrowed).borrowBalanceCurrent(borrower);
+        uint256 maxRepay = _maxRepayForCollateral(jTokenBorrowed, jTokenCollateral, borrower);
+        if (maxRepay == 0) return;
 
-        IERC20(underlying).forceApprove(jTokenBorrowed, borrowBalance);
+        if (repay > maxRepay) repay = maxRepay;
 
-        uint256 error = JToken(jTokenBorrowed).liquidateBorrow(borrower, borrowBalance, JToken(jTokenCollateral));
+        IERC20(underlying).forceApprove(jTokenBorrowed, repay);
+
+        uint256 error = JToken(jTokenBorrowed).liquidateBorrow(borrower, repay, JToken(jTokenCollateral));
         if (error != 0) revert LiquidateFailed(error, jTokenBorrowed, jTokenCollateral, borrower);
 
         uint256 redeemTokens = JToken(jTokenCollateral).balanceOf(address(this));
         error = JToken(jTokenCollateral).redeem(redeemTokens);
         if (error != 0) revert RedeemFailed(error, jTokenCollateral, address(this));
+    }
+
+    /// @notice Computes the maximum repay amount that won't exceed the borrower's collateral.
+    /// @param jTokenBorrowed The jToken market with the borrow.
+    /// @param jTokenCollateral The jToken market to seize from.
+    /// @param borrower The borrower whose collateral to check.
+    /// @return maxRepay The maximum safe repay amount in underlying units of the borrowed token.
+    function _maxRepayForCollateral(address jTokenBorrowed, address jTokenCollateral, address borrower)
+        internal
+        returns (uint256 maxRepay)
+    {
+        IJoetroller joetroller = IJoetroller(JToken(jTokenBorrowed).joetroller());
+        IPriceOracle oracle = joetroller.oracle();
+
+        uint256 priceBorrowed = oracle.getUnderlyingPrice(jTokenBorrowed);
+        uint256 priceCollateral = oracle.getUnderlyingPrice(jTokenCollateral);
+        uint256 exchangeRate = JToken(jTokenCollateral).exchangeRateCurrent();
+        uint256 collateralBalance = JToken(jTokenCollateral).balanceOf(borrower);
+
+        // Get the liquidation incentive for this contract (trusted liquidator rate)
+        uint256 incentive = joetroller.trustedLiquidationIncentiveMantissa();
+        if (incentive == 0) incentive = joetroller.liquidationIncentiveMantissa();
+
+        // Inverse of the seize formula with conservative rounding.
+        // Goal: maximize ratio so maxRepay is as small as possible.
+        // num UP, denom DOWN → larger ratio. maxRepay DOWN → smaller result.
+        uint256 num = Math.ceilDiv(incentive * priceBorrowed, 1e18);
+        uint256 denom = priceCollateral * exchangeRate / 1e18;
+        uint256 ratio = Math.ceilDiv(num * 1e18, denom);
+        maxRepay = collateralBalance * 1e18 / ratio;
     }
 
     /// @notice Transfers a user's jTokens to the Escrow and redeems them.
@@ -77,6 +127,7 @@ contract TrustedLiquidator is Ownable, Multicall {
     /// @param redeemer The user whose jTokens will be transferred and redeemed.
     function transferAndRedeem(address escrow, address jToken, address redeemer) external onlyOwner {
         uint256 balance = JToken(jToken).balanceOf(redeemer);
+        if (balance == 0) return;
         IERC20(jToken).safeTransferFrom(redeemer, escrow, balance);
         IEscrow(escrow).storeRedeem(jToken, redeemer, balance);
     }
@@ -86,10 +137,16 @@ contract TrustedLiquidator is Ownable, Multicall {
     ///      The borrower's debt is zeroed out; they keep any collateral they have.
     /// @param jToken The jToken market where the borrower has debt.
     /// @param borrower The address of the borrower whose debt to repay.
-    function repayBorrowBehalf(address jToken, address borrower) external onlyOwner {
-        address underlying = JToken(jToken).underlying();
+    /// @param maxRepay Maximum repay amount (in underlying). Reverts if the actual
+    ///        borrow exceeds this — protects against frontrunning between snapshot
+    ///        and execution. Pass type(uint256).max to skip the check.
+    function repayBorrowBehalf(address jToken, address borrower, uint256 maxRepay) external onlyOwner {
         uint256 balance = JToken(jToken).borrowBalanceCurrent(borrower);
+        if (balance == 0) return;
 
+        if (balance > maxRepay) revert RepayExceedsMax(balance, maxRepay, jToken, borrower);
+
+        address underlying = JToken(jToken).underlying();
         IERC20(underlying).forceApprove(jToken, balance);
 
         uint256 error = JToken(jToken).repayBorrowBehalf(borrower, balance);
@@ -106,10 +163,7 @@ contract TrustedLiquidator is Ownable, Multicall {
         IERC20(token).safeTransfer(to, amount);
     }
 
-    /// @notice Executes an arbitrary call. Escape hatch for edge cases.
-    /// @dev Can be used for partial liquidations (calling `liquidateBorrow` directly
-    ///      with a specific repay amount) or any other operation not covered by
-    ///      the dedicated functions.
+    /// @notice Executes an arbitrary call.
     /// @param to The target contract address.
     /// @param value Native token value to send with the call.
     /// @param data The calldata to execute.

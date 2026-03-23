@@ -12,9 +12,6 @@ require("hardhat-contract-sizer");
 require("hardhat-storage-layout-diff");
 require("@openzeppelin/hardhat-upgrades");
 require("./tasks/dashboard");
-require("./tasks/positions");
-require("./tasks/actions");
-
 
 const { HardhatUserConfig } = require("hardhat/types");
 const { removeConsoleLog } = require("hardhat-preprocessor");

@@ -21,6 +21,7 @@ interface IJoetroller {
         address borrower,
         uint256 repayAmount
     ) external returns (uint256);
+    function getAllMarkets() external view returns (address[] memory);
 }
 
 interface IJToken {
@@ -53,10 +54,14 @@ contract TrustedLiquidatorTest is Test {
     address public constant USDT = 0xc7198437980c041c805A1EDcbA50c1Ce5db95118;
     address public constant JUSDT = 0x8b650e26404AC6837539ca96812f0123601E4448;
 
+    address public constant JAVAX = 0xC22F01ddc8010Ee05574028528614634684EC29e;
+    address public constant JWAVAX = 0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7;
+
     address public constant USER_DEPOSITED_MIM = 0x796BE5344E7076f363c7B6cb76Df11C9b1e91156;
     address public constant USER_BORROWED_MIM = 0xc3Fd4Acb7efFD92FC7a88c62b05776Fb6C4d0cDd;
     address public constant USER_MIM_BAD_DEBT = 0xa75D8527939adc9c370774b456727FD43a2272D9;
     address public constant USER_BORROWED_AGAINST_MIM = 0x3aa5F6e2Eb0F70699Ea9E72A90A0D8dA495FE53C;
+    address public constant USER_UNDERWATER_SMALL = 0x10B721dA2CA9C4e9722bB072152d3386B6399a95;
 
     uint256 public constant ESCROW_DEADLINE = 365 days;
 
@@ -66,15 +71,23 @@ contract TrustedLiquidatorTest is Test {
         admin = joetroller.admin();
 
         address newJoetroller = deployCode("Joetroller.sol");
-        address newJmim = deployCode("JCollateralCapErc20Delegate.sol");
+
         liquidator = new TrustedLiquidator(admin);
         escrow = new Escrow(address(liquidator), block.timestamp + ESCROW_DEADLINE);
+
+        address[] memory markets = joetroller.getAllMarkets();
 
         vm.startPrank(admin);
         joetroller._setPendingImplementation(newJoetroller);
         IJoetroller(newJoetroller)._become(address(joetroller));
-        IJToken(JMIM)._setImplementation(newJmim, false, "");
         joetroller._setTrustedLiquidator(address(liquidator));
+
+        address erc20Delegate = deployCode("JCollateralCapErc20Delegate.sol");
+        address nativeDelegate = deployCode("JWrappedNativeDelegate.sol");
+        for (uint256 i = 0; i < markets.length; i++) {
+            address impl = markets[i] == JAVAX ? nativeDelegate : erc20Delegate;
+            IJToken(markets[i])._setImplementation(impl, false, "");
+        }
         vm.stopPrank();
     }
 
@@ -194,7 +207,7 @@ contract TrustedLiquidatorTest is Test {
         deal(MIM, address(liquidator), borrowed);
 
         vm.prank(admin);
-        liquidator.repayBorrowBehalf(JMIM, USER_MIM_BAD_DEBT);
+        liquidator.repayBorrowBehalf(JMIM, USER_MIM_BAD_DEBT, type(uint256).max);
 
         assertEq(IJToken(JMIM).borrowBalanceCurrent(USER_MIM_BAD_DEBT), 0, "test_RepayBorrowBehalf::3");
         assertEq(IERC20(MIM).balanceOf(USER_MIM_BAD_DEBT), mimBalance, "test_RepayBorrowBehalf::4");
@@ -226,9 +239,8 @@ contract TrustedLiquidatorTest is Test {
 
         bytes[] memory calls = new bytes[](2);
         calls[0] = abi.encodeCall(TrustedLiquidator.liquidate, (JUSDC, JMIM, USER_BORROWED_AGAINST_MIM));
-        calls[1] = abi.encodeCall(
-            TrustedLiquidator.transferAndRedeem, (address(escrow), JMIM, USER_BORROWED_AGAINST_MIM)
-        );
+        calls[1] =
+            abi.encodeCall(TrustedLiquidator.transferAndRedeem, (address(escrow), JMIM, USER_BORROWED_AGAINST_MIM));
 
         vm.prank(admin);
         liquidator.multicall(calls);
@@ -294,7 +306,7 @@ contract TrustedLiquidatorTest is Test {
     function test_RepayBorrowBehalfOnlyOwner() public {
         vm.prank(makeAddr("random"));
         vm.expectRevert();
-        liquidator.repayBorrowBehalf(JMIM, USER_MIM_BAD_DEBT);
+        liquidator.repayBorrowBehalf(JMIM, USER_MIM_BAD_DEBT, type(uint256).max);
     }
 
     function test_TransferOnlyOwner() public {
@@ -311,9 +323,7 @@ contract TrustedLiquidatorTest is Test {
 
     function test_MulticallOnlyOwner() public {
         bytes[] memory calls = new bytes[](1);
-        calls[0] = abi.encodeCall(
-            TrustedLiquidator.transferAndRedeem, (address(escrow), JMIM, USER_DEPOSITED_MIM)
-        );
+        calls[0] = abi.encodeCall(TrustedLiquidator.transferAndRedeem, (address(escrow), JMIM, USER_DEPOSITED_MIM));
 
         vm.prank(makeAddr("random"));
         vm.expectRevert();
@@ -577,7 +587,104 @@ contract TrustedLiquidatorTest is Test {
         assertEq(escrow.deadline(), newDeadline, "deadline should be updated");
     }
 
-    function test_Escrow_DeadlineSetInConstructor() public {
+    function test_Escrow_DeadlineSetInConstructor() public view {
         assertEq(escrow.deadline(), block.timestamp + ESCROW_DEADLINE, "deadline should be set");
+    }
+
+    // -- MaxRepay / partial liquidation tests --
+
+    /// @notice Real user: ~$0.06 MIM supply, ~$0.21 MIM borrow, ~$0.07 jAVAX collateral.
+    /// Full liquidation of MIM borrow against jAVAX would fail with SEIZE_TOO_MUCH.
+    /// With maxRepay cap, liquidate should succeed with a partial repay.
+    function test_Liquidate_CapsRepayWhenCollateralInsufficient() public {
+        // Confirm the user has a MIM borrow and jAVAX collateral
+        uint256 snapshot = vm.snapshotState();
+        uint256 mimBorrow = IJToken(JMIM).borrowBalanceCurrent(USER_UNDERWATER_SMALL);
+        vm.revertToState(snapshot);
+        assertGt(mimBorrow, 0, "user should have MIM borrow");
+
+        uint256 javaxBalance = IERC20(JAVAX).balanceOf(USER_UNDERWATER_SMALL);
+        assertGt(javaxBalance, 0, "user should have jAVAX collateral");
+
+        // Fund the liquidator with enough MIM
+        deal(MIM, address(liquidator), mimBorrow);
+
+        // This would revert with SEIZE_TOO_MUCH without the maxRepay cap
+        vm.prank(admin);
+        liquidator.liquidate(JMIM, JAVAX, USER_UNDERWATER_SMALL);
+
+        // Borrow should be reduced but not necessarily zero (partial liquidation)
+        uint256 borrowAfter = IJToken(JMIM).borrowBalanceCurrent(USER_UNDERWATER_SMALL);
+        assertLt(borrowAfter, mimBorrow, "borrow should decrease");
+
+        // All jAVAX collateral should be seized (or nearly all)
+        uint256 javaxAfter = IERC20(JAVAX).balanceOf(USER_UNDERWATER_SMALL);
+        assertLt(javaxAfter, javaxBalance, "jAVAX should be seized");
+    }
+
+    /// @notice When collateral fully covers the borrow, liquidate should repay everything
+    /// (same behavior as before maxRepay was added).
+    function test_Liquidate_FullRepayWhenCollateralSufficient() public {
+        uint256 snapshot = vm.snapshotState();
+        uint256 borrowed = IJToken(JMIM).borrowBalanceCurrent(USER_BORROWED_MIM);
+        vm.revertToState(snapshot);
+        assertGt(borrowed, 0, "should have borrow");
+
+        deal(MIM, address(liquidator), borrowed);
+
+        vm.prank(admin);
+        liquidator.liquidate(JMIM, JBTC, USER_BORROWED_MIM);
+
+        // Full repay — borrow should be zero
+        assertEq(IJToken(JMIM).borrowBalanceCurrent(USER_BORROWED_MIM), 0, "borrow should be fully repaid");
+    }
+
+    /// @notice Verify the seize doesn't exceed collateral after a capped liquidation.
+    /// The forward seize formula applied to the capped repay must produce seizeTokens <= collateralBalance.
+    function test_Liquidate_SeizeNeverExceedsCollateral() public {
+        uint256 javaxBefore = IERC20(JAVAX).balanceOf(USER_UNDERWATER_SMALL);
+
+        uint256 snapshot = vm.snapshotState();
+        uint256 mimBorrow = IJToken(JMIM).borrowBalanceCurrent(USER_UNDERWATER_SMALL);
+        vm.revertToState(snapshot);
+
+        deal(MIM, address(liquidator), mimBorrow);
+
+        vm.prank(admin);
+        liquidator.liquidate(JMIM, JAVAX, USER_UNDERWATER_SMALL);
+
+        // The user's jAVAX should never go negative (implicit — would revert on underflow)
+        // and the liquidator should have received some AVAX
+        uint256 javaxAfter = IERC20(JAVAX).balanceOf(USER_UNDERWATER_SMALL);
+        assertLe(javaxAfter, javaxBefore, "jAVAX should not increase");
+    }
+
+    /// @notice Multiple partial liquidations against different collateral markets.
+    /// Simulate a user with small collateral in multiple markets and a large borrow.
+    function test_Liquidate_MultiplePartialLiquidations() public {
+        // USER_UNDERWATER_SMALL has MIM borrow, jAVAX collateral, and possibly USDT borrow
+        // Liquidate MIM borrow against jAVAX (partial), then check remaining borrow
+        uint256 snapshot = vm.snapshotState();
+        uint256 mimBorrow = IJToken(JMIM).borrowBalanceCurrent(USER_UNDERWATER_SMALL);
+        vm.revertToState(snapshot);
+
+        deal(MIM, address(liquidator), mimBorrow);
+
+        // First liquidation: MIM borrow vs jAVAX collateral (partial)
+        vm.prank(admin);
+        liquidator.liquidate(JMIM, JAVAX, USER_UNDERWATER_SMALL);
+
+        // Borrow reduced but not zero
+        uint256 borrowAfterFirst = IJToken(JMIM).borrowBalanceCurrent(USER_UNDERWATER_SMALL);
+
+        // If user has MIM supply too, liquidate against that
+        uint256 jmimBalance = IERC20(JMIM).balanceOf(USER_UNDERWATER_SMALL);
+        if (jmimBalance > 0 && borrowAfterFirst > 0) {
+            vm.prank(admin);
+            liquidator.liquidate(JMIM, JMIM, USER_UNDERWATER_SMALL);
+
+            uint256 borrowAfterSecond = IJToken(JMIM).borrowBalanceCurrent(USER_UNDERWATER_SMALL);
+            assertLe(borrowAfterSecond, borrowAfterFirst, "borrow should decrease further");
+        }
     }
 }

@@ -1041,7 +1041,7 @@ contract Joetroller is JoetrollerV1Storage, JoetrollerInterface, JoetrollerError
      * @return The liquidation incentive mantissa
      */
     function _getLiquidationIncentiveMantissa(address liquidator) internal view returns (uint256) {
-        if (liquidator == address(0) || liquidator != trustedLiquidator) {
+        if (liquidator != trustedLiquidator) {
             return liquidationIncentiveMantissa;
         }
         uint256 mantissa = trustedLiquidationIncentiveMantissa;

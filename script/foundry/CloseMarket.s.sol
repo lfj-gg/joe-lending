@@ -3,18 +3,11 @@
 pragma solidity ^0.8.20;
 
 import {Script} from "lib/forge-std/src/Script.sol";
-import {EnumerableSet} from "lib/openzeppelin-contracts/contracts/utils/structs/EnumerableSet.sol";
 
 import {TrustedLiquidator} from "../../contracts/TrustedLiquidator/TrustedLiquidator.sol";
-
-interface IJToken {
-    function underlying() external view returns (address);
-    function borrowBalanceCurrent(address account) external returns (uint256);
-}
+import {Escrow} from "../../contracts/TrustedLiquidator/Escrow.sol";
 
 contract CloseMarketScript is Script {
-    using EnumerableSet for EnumerableSet.AddressSet;
-
     struct RedeemAction {
         address jToken;
         address user;
@@ -28,52 +21,61 @@ contract CloseMarketScript is Script {
 
     struct RepayAction {
         address jToken;
+        uint256 maxRepay;
         address user;
     }
 
-    TrustedLiquidator public liquidator = TrustedLiquidator(payable(0x0000000000000000000000000000000000000000));
+    TrustedLiquidator public liquidator = TrustedLiquidator(payable(vm.envAddress("TRUSTED_LIQUIDATOR")));
+    Escrow public escrow = Escrow(vm.envAddress("ESCROW"));
 
-
-    EnumerableSet.AddressSet internal users;
-    mapping(address => bytes[]) public calls;
-
-    function run(string calldata jsonPath) external {
-        uint256 deployerPrivateKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+    /// @notice Execute a single batch from the action plan.
+    /// @param jsonPath Path to the action plan JSON.
+    /// @param batchIndex Zero-based index of the batch to execute.
+    function run(string calldata jsonPath, uint256 batchIndex) external {
+        uint256 deployerPrivateKey = vm.envUint("DEPLOY_PRIVATE_KEY");
 
         // forge-lint: disable-next-line(unsafe-cheatcode)
         string memory json = vm.readFile(jsonPath);
+        string memory batchKey = string.concat(".batches[", vm.toString(batchIndex), "]");
 
-        RedeemAction[] memory redeems = abi.decode(vm.parseJson(json, ".redeemOnBehalf"), (RedeemAction[]));
-        LiquidateAction[] memory liquidations = abi.decode(vm.parseJson(json, ".liquidate"), (LiquidateAction[]));
-        RepayAction[] memory repays = abi.decode(vm.parseJson(json, ".repayBorrowBehalf"), (RepayAction[]));
+        LiquidateAction[] memory liquidations = abi.decode(
+            vm.parseJson(json, string.concat(batchKey, ".liquidate")),
+            (LiquidateAction[])
+        );
+        RepayAction[] memory repays = abi.decode(
+            vm.parseJson(json, string.concat(batchKey, ".repayBorrowBehalf")),
+            (RepayAction[])
+        );
+        RedeemAction[] memory redeems = abi.decode(
+            vm.parseJson(json, string.concat(batchKey, ".transferAndRedeem")),
+            (RedeemAction[])
+        );
+
+        uint256 totalCalls = liquidations.length + repays.length + redeems.length;
+        bytes[] memory calls = new bytes[](totalCalls);
+        uint256 idx;
 
         for (uint256 i; i < liquidations.length; i++) {
             LiquidateAction memory a = liquidations[i];
-            users.add(a.user);
-            calls[a.user].push(abi.encodeCall(TrustedLiquidator.liquidate, (a.jTokenBorrowed, a.jTokenCollateral, a.user)));
+            calls[idx++] = abi.encodeCall(
+                TrustedLiquidator.liquidate, (a.jTokenBorrowed, a.jTokenCollateral, a.user)
+            );
         }
         for (uint256 i; i < repays.length; i++) {
             RepayAction memory a = repays[i];
-            users.add(a.user);
-            calls[a.user].push(abi.encodeCall(TrustedLiquidator.repayBorrowBehalf, (a.jToken, a.user)));
+            calls[idx++] = abi.encodeCall(
+                TrustedLiquidator.repayBorrowBehalf, (a.jToken, a.user, a.maxRepay)
+            );
         }
         for (uint256 i; i < redeems.length; i++) {
             RedeemAction memory a = redeems[i];
-            users.add(a.user);
-            calls[a.user].push(abi.encodeCall(TrustedLiquidator.redeemOnBehalf, (a.jToken, a.user)));
+            calls[idx++] = abi.encodeCall(
+                TrustedLiquidator.transferAndRedeem, (address(escrow), a.jToken, a.user)
+            );
         }
 
         vm.startBroadcast(deployerPrivateKey);
-        
-        uint256 length = users.length();
-        for (uint256 i; i < length; i++) {
-            address user = users.at(i);
-            bytes[] memory userCalls = calls[user];
-            require(userCalls.length > 0, "no calls for user");
-
-            liquidator.multicall(userCalls);
-        }
-
+        liquidator.multicall(calls);
         vm.stopBroadcast();
     }
 }
