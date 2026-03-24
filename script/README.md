@@ -42,7 +42,7 @@ Outputs `mim-action-plan.json`.
 Displays market health overview (supply, borrow, utilization, APY).
 
 ```bash
-npx hardhat dashboard --network mainnet
+npx hardhat dashboard --network avalanche
 ```
 
 ## 4. E2E test (Anvil fork)

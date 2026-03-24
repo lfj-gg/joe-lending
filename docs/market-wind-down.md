@@ -26,7 +26,7 @@ These steps were completed for the jMIM wind-down and only need repeating if con
 1. **Deploy upgraded Joetroller** — adds `trustedLiquidator` bypass logic in `liquidateBorrowAllowed` and `trustedLiquidationIncentiveMantissa` for a reduced liquidation penalty.
 2. **Deploy upgraded JCollateralCapErc20Delegate** — adds `transferFrom` bypass for trusted liquidator in `transferTokens`.
 3. **Deploy TrustedLiquidator** — owner-only contract that orchestrates the wind-down.
-4. **Deploy Escrow** — pass the TrustedLiquidator address and a claim deadline (unix timestamp). `script/foundry/DeployUpgrade.s.sol` deploys both (reads `ESCROW_DEADLINE` from env).
+4. **Deploy Escrow** — pass the TrustedLiquidator address and a claim deadline (unix timestamp). `script/foundry/DeployTrustedLiquidator.s.sol` deploys both (reads `ESCROW_DEADLINE` from env).
 5. **Register the TrustedLiquidator** — `Joetroller._setTrustedLiquidator(address)` (admin only).
 6. **Upgrade target market** — `JTokenAdmin._setImplementation(jToken, newDelegate, true, "")` to the delegate with the `transferTokens` bypass.
 
@@ -62,39 +62,42 @@ Joetroller._setCollateralFactor(jToken, 0)
 ### 3. Snapshot positions
 
 ```bash
-npx hardhat positions --asset <SYMBOL> --network avalanche
+uv run script/snapshot.py jMIM
 ```
 
-Fetches all users who have interacted with the target jToken (via subgraph), then multicalls `balanceOf` and `borrowBalanceStored` across all markets for each user.
+Fetches all users who have interacted with the target jToken (via subgraph), then multicalls `balanceOf` and `borrowBalanceStored` across all markets for each user. Falls back to refreshing from the existing CSV if the subgraph is unavailable.
 
 **Output:** `{symbol}-user-positions.csv` — one row per user, columns for every market (amount + USD), plus a total USD column.
 
-**Sanity check:** The task compares `sum(balanceOf)` against `totalSupply()` and `sum(borrowBalanceStored)` against `totalBorrows()`. Supply must match exactly. Borrows may have small rounding dust (see Known Edge Cases below).
+**Sanity check:** The script compares `sum(balanceOf)` against `totalSupply()` and `sum(borrowBalanceStored)` against `totalBorrows()`. Supply must match exactly. Borrows may have small rounding dust (see Known Edge Cases below).
 
 **Env required:** `GRAPH_API_KEY` in `.env`.
 
 ### 4. Generate action plan
 
 ```bash
-npx hardhat actions --asset <SYMBOL> --network avalanche
+uv run script/classifier.py jMIM
 ```
 
-Reads the positions CSV and classifies each user into one of five categories:
+Options:
+- `--batch-size N` — max actions per batch (default: 40)
+- `--rerun` — re-run the snapshot before classifying
 
-| Category | Meaning | TrustedLiquidator action |
-|----------|---------|--------------------------|
-| **REDEEM** | User only supplies the target (or is healthy without it) | `transferAndRedeem` — jTokens move to Escrow, Escrow redeems, user claims underlying |
-| **LIQUIDATE_BORROWS_THEN_REDEEM** | User has borrows in other markets backed by the target; liquidate those borrows to free the target, then redeem | `liquidate` (other borrowed, target collateral) + `transferAndRedeem` |
-| **FLAG_CANNOT_FREE** | Borrows exceed collateral even after freeing target — manual intervention needed | Review manually |
-| **LIQUIDATE_BORROW** | User borrows the target token; has collateral in other markets | `liquidate` (target borrowed, other collateral) |
-| **BAD_DEBT** | User borrows the target with no collateral | `repayBorrowBehalf` |
+Reads the positions CSV and iteratively classifies each user into a sequence of actions:
+
+| Action | When | What happens |
+|--------|------|--------------|
+| **transferAndRedeem** | User only supplies the target (or is healthy without it) | jTokens move to Escrow, Escrow redeems, user claims underlying |
+| **liquidate** | User borrows the target and has collateral, or user supplies the target and has borrows | Repay borrow (capped by collateral value), seize and redeem collateral |
+| **repayBorrowBehalf** | User has bad debt (borrow with no collateral) or residual borrow after liquidation | Repay borrow from TrustedLiquidator funds, no recovery |
+
+The classifier runs iteratively per user — a single user may generate multiple actions (e.g. liquidate then repay residual then redeem).
 
 **Output:**
-- Console summary with per-category user counts and USD totals
-- Funding summary: per-token amounts needed by the TrustedLiquidator
-- `{symbol}-action-plan.json` — Forge-consumable JSON with resolved addresses
+- Console summary with funding needed and bad debt per asset
+- `{symbol}-action-plan.json` — JSON consumed by `e2e-wind-down.sh` with resolved addresses and batched actions
 
-**Review the plan** before proceeding, especially any `FLAG_CANNOT_FREE` cases.
+**Review the plan** before proceeding, especially any `unknown` action errors.
 
 ### 5. Fund the TrustedLiquidator
 
@@ -113,19 +116,20 @@ The action plan JSON includes a `funding` section listing every token the Truste
 Transfer each token amount (+ buffer for interest accrual between snapshot and execution) to the TrustedLiquidator contract address.
 
 The liquidator needs these tokens because:
-- **LIQUIDATE_BORROW**: repays the target token borrow to seize collateral.
-- **BAD_DEBT**: repays on behalf with no expectation of recovery.
-- **LIQUIDATE_BORROWS_THEN_REDEEM**: repays borrows in *other* markets (e.g. USDC) to free the target collateral for redemption. Users are left at a health ratio >= 1.20 to avoid putting them at immediate liquidation risk.
+- **liquidate**: repays borrow tokens to seize collateral (the liquidator pays the borrowed token, receives the collateral token).
+- **repayBorrowBehalf**: repays bad debt on behalf with no expectation of recovery.
 
 ### 6. Execute the close
 
 ```bash
-forge script script/foundry/CloseMarket.s.sol \
-  --rpc-url $AVALANCHE_RPC_URL \
-  --broadcast
+./script/e2e-wind-down.sh MIM
 ```
 
-Reads the action plan JSON and executes all operations via the TrustedLiquidator's `multicall`. Actions are batched per user.
+Deploys contracts, funds the TrustedLiquidator, and executes the full action plan on a local Anvil fork. Each batch is sent as a single `multicall(bytes[])` transaction.
+
+Options:
+- `./script/e2e-wind-down.sh MIM <START_BATCH>` — resume from a specific batch
+- `./script/e2e-wind-down.sh MIM <START_BATCH> <RPC_URL>` — custom fork RPC
 
 For REDEEM and LIQUIDATE_BORROWS_THEN_REDEEM users, `transferAndRedeem` moves their jTokens to the Escrow, which redeems them for the underlying. The underlying stays in the Escrow — users must claim it (see next step). The TrustedLiquidator never holds user funds.
 
@@ -182,11 +186,11 @@ This transfers the entire token balance of the Escrow to the specified address. 
 
 | Task | Command | Input | Output |
 |------|---------|-------|--------|
-| `positions` | `npx hardhat positions --asset <SYM> --network avalanche` | Subgraph + on-chain multicall | `{sym}-user-positions.csv` |
-| `actions` | `npx hardhat actions --asset <SYM> --network avalanche` | `{sym}-user-positions.csv` | `{sym}-action-plan.json` + console summary |
-| `dashboard` | `npx hardhat dashboard --network avalanche` | On-chain multicall | Console tables |
-| DeployUpgrade | `forge script script/foundry/DeployUpgrade.s.sol --broadcast` | `ESCROW_DEADLINE` env var | Deploys Joetroller, Delegate, TrustedLiquidator, Escrow |
-| CloseMarket | `forge script script/foundry/CloseMarket.s.sol --broadcast` | `{sym}-action-plan.json` | On-chain transactions |
+| Snapshot | `uv run script/snapshot.py jMIM` | Subgraph + on-chain multicall | `mim-user-positions.csv` |
+| Classify | `uv run script/classifier.py jMIM` | `mim-user-positions.csv` | `mim-action-plan.json` + console summary |
+| Dashboard | `npx hardhat dashboard --network avalanche` | On-chain multicall | Console tables |
+| Deploy | `forge script script/foundry/DeployTrustedLiquidator.s.sol --broadcast` | `ESCROW_DEADLINE` env var | Deploys TrustedLiquidator, Escrow, delegates |
+| E2E test | `./script/e2e-wind-down.sh MIM` | `mim-action-plan.json` | Anvil fork execution |
 
 ## Known edge cases
 
@@ -201,25 +205,17 @@ This dust:
 
 ### Reserve ordering
 
-Always withdraw reserves AFTER `totalSupply` reaches 0. If reserves are drained while the last supplier still holds jTokens, the exchange rate math (`getCash >= getCash + totalBorrows - reserves`) may fail by the dust amount, blocking their final redemption.
+Always withdraw reserves AFTER `totalSupply` reaches 0. Reserves are held in the market's underlying cash balance. If reserves are withdrawn while a supplier still holds jTokens, the remaining cash may be insufficient for their final redemption — the market would lack the liquidity to pay them out.
 
 ### Subgraph staleness
 
-The `positions` task fetches users from the subgraph filtered to non-zero `jTokenBalance` or `storedBorrowBalance`. Users who have fully exited are excluded. Users with dust in the subgraph but zero on-chain are filtered out by the on-chain `targetIdx` check. The `totalSupply`/`totalBorrows` sanity check confirms no active users are missed.
+The snapshot script fetches users from the subgraph filtered to non-zero `jTokenBalance` or `storedBorrowBalance`. Users who have fully exited are excluded. Users with dust in the subgraph but zero on-chain are filtered out by the on-chain `targetIdx` check. The `totalSupply`/`totalBorrows` sanity check confirms no active users are missed.
 
-### FLAG_CANNOT_FREE users
+### Partial liquidations
 
-These users have borrows in other markets that exceed their available collateral even after freeing the target asset. They require manual analysis — options include waiting for them to self-liquidate, using the TrustedLiquidator to partially unwind, or treating residual amounts as bad debt.
+The TrustedLiquidator's `liquidate` function caps the repay amount via `_maxRepayForCollateral`, which computes the maximum repay that won't exceed the borrower's collateral value. If a borrow exceeds the available collateral, only a partial liquidation occurs — the remainder must be handled by subsequent actions (e.g. liquidating against a different collateral market, or repaying as bad debt).
 
-### LIQUIDATE_BORROWS_THEN_REDEEM execution failures
-
-The `actions` script classifies a user as LIQUIDATE_BORROWS_THEN_REDEEM when their borrows need to be partially liquidated before the target can be redeemed. The liquidation seizes the target jToken as collateral.
-
-However, the TrustedLiquidator always repays the **full** borrow balance in a given market. If a single borrow exceeds the user's target collateral value, the seize will revert (not enough target jTokens to cover).
-
-Example: user has $100 MIM + $500 USDC deposited, borrowed $501 AVAX. The script generates `liquidate(jAVAX, jMIM, user)` which tries to repay all $501 AVAX and seize $501+ of MIM from a user who only has $100 MIM.
-
-**Manual workaround:** Use the TrustedLiquidator's `call()` function to execute a partial `liquidateBorrow` with a specific repay amount, or liquidate against a different collateral market (e.g. seize USDC instead of MIM to reduce the borrow, then redeem MIM). These cases will show up as revert failures during CloseMarket execution — they are not silent.
+The classifier handles this iteratively: after each liquidation it updates the simulated positions and generates the next action until the user's target position is fully unwound.
 
 ### Funding buffer
 
