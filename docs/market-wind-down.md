@@ -6,8 +6,8 @@ Procedure for fully closing a BankerJoe lending market: clear all borrows, redee
 
 | Contract | Role |
 |----------|------|
-| **TrustedLiquidator** | Orchestrates liquidations and repayments. Transfers user jTokens to the Escrow for redemption. Owner-only. Uses `multicall` to batch operations per user. |
-| **Escrow** | Holds underlying tokens redeemed during wind-down. Users claim before a deadline; unclaimed funds go to the protocol after. Deployed separately, linked to the TrustedLiquidator. |
+| **TrustedLiquidator** | Orchestrates liquidations and repayments. Pulls user jTokens, redeems them, deducts a configurable redeem fee, and forwards the net underlying to the Escrow. Owner-only. Uses `multicall` to batch operations per user. |
+| **Escrow** | Holds underlying tokens deposited by the TrustedLiquidator during wind-down. Users claim before a deadline; unclaimed funds go to the protocol after. Deployed separately, linked to the TrustedLiquidator. |
 | **Joetroller** (upgraded) | `trustedLiquidator` state variable. `liquidateBorrowAllowed` bypasses shortfall and close factor checks for the trusted liquidator. `trustedLiquidationIncentiveMantissa` allows a reduced liquidation penalty (falls back to global incentive if unset). `_delistMarket` removes a fully emptied market. |
 | **JCollateralCapErc20Delegate** (upgraded) | `transferTokens` grants the trusted liquidator infinite allowance — enables `transferFrom` without user approval. |
 | **JWrappedNativeDelegate** (upgraded) | Same `transferTokens` bypass for native-wrapped markets (jAVAX). |
@@ -25,22 +25,32 @@ These steps were completed for the jMIM wind-down and only need repeating if con
 
 1. **Deploy upgraded Joetroller** — adds `trustedLiquidator` bypass logic in `liquidateBorrowAllowed` and `trustedLiquidationIncentiveMantissa` for a reduced liquidation penalty.
 2. **Deploy upgraded JCollateralCapErc20Delegate** — adds `transferFrom` bypass for trusted liquidator in `transferTokens`.
-3. **Deploy TrustedLiquidator** — owner-only contract that orchestrates the wind-down.
-4. **Deploy Escrow** — pass the TrustedLiquidator address and a claim deadline (unix timestamp). `script/foundry/DeployTrustedLiquidator.s.sol` deploys both (reads `ESCROW_DEADLINE` from env).
+3. **Deploy TrustedLiquidator** — owner-only contract that orchestrates the wind-down. Constructor takes the owner and the initial `redeemFee` (in BPS, `0–10000`).
+4. **Deploy Escrow** — pass the TrustedLiquidator address and a claim deadline (unix timestamp). `script/foundry/DeployTrustedLiquidator.s.sol` deploys both (reads `ESCROW_DEADLINE` from env and `REDEEM_FEE` from env; `REDEEM_FEE` is required and reverts if unset).
 5. **Register the TrustedLiquidator** — `Joetroller._setTrustedLiquidator(address)` (admin only).
 6. **Upgrade target market** — `JTokenAdmin._setImplementation(jToken, newDelegate, true, "")` to the delegate with the `transferTokens` bypass.
 
 ## Step-by-step process
 
-### 0. Set the trusted liquidation incentive
+### 0. Set the trusted liquidation incentive and redeem fee
 
-Users being force-liquidated during a wind-down were not at risk of liquidation — charging them the full liquidation penalty (typically 8-10%) would be unfair. The Joetroller supports a separate incentive for the TrustedLiquidator that does not affect regular liquidators:
+Wind-downs use two independent fee levers to cover protocol shortfalls (e.g. phantom debt) without over-penalising users.
+
+**Trusted liquidation incentive** — applied when the TrustedLiquidator calls `liquidate`. Users being force-liquidated were not at risk of liquidation, so the full liquidation penalty (typically 8-10%) would be unfair. The Joetroller supports a separate incentive for the TrustedLiquidator that does not affect regular liquidators:
 
 ```
 Joetroller._setTrustedLiquidationIncentiveMantissa(1.01e18)  // 1% penalty
 ```
 
 If unset (zero), the global `liquidationIncentiveMantissa` is used as fallback. Set this before executing the close and leave it in place — it only applies to the TrustedLiquidator.
+
+**Redeem fee** — applied when the TrustedLiquidator calls `transferAndRedeem`. A BPS value (`0-10000`) retained from every redeemed underlying amount before it reaches the Escrow. The fee stays in the TrustedLiquidator and is withdrawn by the owner via `transfer`. Initialised at deployment via `REDEEM_FEE` and adjustable by the owner:
+
+```
+TrustedLiquidator.setRedeemFee(50)  // 0.5% fee
+```
+
+Values above `10000` (100%) revert. Setting `10000` drains the entire redeem to the TrustedLiquidator — use with intent.
 
 ### 1. Pause the market
 
@@ -87,7 +97,7 @@ Reads the positions CSV and iteratively classifies each user into a sequence of 
 
 | Action | When | What happens |
 |--------|------|--------------|
-| **transferAndRedeem** | User only supplies the target (or is healthy without it) | jTokens move to Escrow, Escrow redeems, user claims underlying |
+| **transferAndRedeem** | User only supplies the target (or is healthy without it) | TrustedLiquidator pulls jTokens, redeems, deducts the redeem fee, and deposits the remainder in the Escrow for the user to claim |
 | **liquidate** | User borrows the target and has collateral, or user supplies the target and has borrows | Repay borrow (capped by collateral value), seize and redeem collateral |
 | **repayBorrowBehalf** | User has bad debt (borrow with no collateral) or residual borrow after liquidation | Repay borrow from TrustedLiquidator funds, no recovery |
 
@@ -95,7 +105,7 @@ The classifier runs iteratively per user — a single user may generate multiple
 
 **Output:**
 - Console summary with funding needed and bad debt per asset
-- `{symbol}-action-plan.json` — JSON consumed by `e2e-wind-down.sh` with resolved addresses and batched actions
+- `{symbol}-action-plan.json` — JSON consumed by `e2e-wind-down-testnet.sh` and `execute-wind-down.sh` with resolved addresses and batched actions
 
 **Review the plan** before proceeding, especially any `unknown` action errors.
 
@@ -122,16 +132,24 @@ The liquidator needs these tokens because:
 ### 6. Execute the close
 
 ```bash
-./script/e2e-wind-down.sh MIM
+./script/e2e-wind-down-testnet.sh MIM
 ```
 
 Deploys contracts, funds the TrustedLiquidator, and executes the full action plan on a local Anvil fork. Each batch is sent as a single `multicall(bytes[])` transaction.
 
 Options:
-- `./script/e2e-wind-down.sh MIM <START_BATCH>` — resume from a specific batch
-- `./script/e2e-wind-down.sh MIM <START_BATCH> <RPC_URL>` — custom fork RPC
+- `./script/e2e-wind-down-testnet.sh MIM <START_BATCH>` — resume from a specific batch
+- `./script/e2e-wind-down-testnet.sh MIM <START_BATCH> <FORK_RPC>` — custom fork RPC
 
-For REDEEM and LIQUIDATE_BORROWS_THEN_REDEEM users, `transferAndRedeem` moves their jTokens to the Escrow, which redeems them for the underlying. The underlying stays in the Escrow — users must claim it (see next step). The TrustedLiquidator never holds user funds.
+For production runs against a live RPC (contracts already deployed and funded):
+
+```bash
+./script/execute-wind-down.sh MIM <RPC_URL>
+```
+
+Requires `TRUSTED_LIQUIDATOR` and `ESCROW` env vars set to the deployed addresses.
+
+For REDEEM and LIQUIDATE_BORROWS_THEN_REDEEM users, `transferAndRedeem` pulls their jTokens into the TrustedLiquidator, redeems for the underlying, retains the configured redeem fee, and deposits the remainder in the Escrow. Users claim the net underlying from the Escrow (see next step); the retained fee stays in the TrustedLiquidator and is recoverable by the owner via `transfer`.
 
 ### 7. User claims
 
@@ -189,8 +207,9 @@ This transfers the entire token balance of the Escrow to the specified address. 
 | Snapshot | `uv run script/snapshot.py jMIM` | Subgraph + on-chain multicall | `mim-user-positions.csv` |
 | Classify | `uv run script/classifier.py jMIM` | `mim-user-positions.csv` | `mim-action-plan.json` + console summary |
 | Dashboard | `npx hardhat dashboard --network avalanche` | On-chain multicall | Console tables |
-| Deploy | `forge script script/foundry/DeployTrustedLiquidator.s.sol --broadcast` | `ESCROW_DEADLINE` env var | Deploys TrustedLiquidator, Escrow, delegates |
-| E2E test | `./script/e2e-wind-down.sh MIM` | `mim-action-plan.json` | Anvil fork execution |
+| Deploy | `forge script script/foundry/DeployTrustedLiquidator.s.sol --broadcast` | `ESCROW_DEADLINE`, `REDEEM_FEE` env vars | Deploys TrustedLiquidator, Escrow, delegates |
+| E2E test | `./script/e2e-wind-down-testnet.sh MIM` | `mim-action-plan.json` | Anvil fork execution |
+| Mainnet execute | `./script/execute-wind-down.sh MIM <RPC_URL>` | `mim-action-plan.json`, `TRUSTED_LIQUIDATOR`, `ESCROW` | Live batch execution |
 
 ## Known edge cases
 

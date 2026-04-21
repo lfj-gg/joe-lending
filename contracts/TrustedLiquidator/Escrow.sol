@@ -6,17 +6,12 @@ import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.so
 import {Ownable} from "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 import {SafeERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 
-interface JToken {
-    function underlying() external view returns (address);
-    function redeem(uint256 redeemTokens) external returns (uint256);
-}
-
 /// @title Escrow
 /// @notice Pull-based claim contract for market wind-down redemptions.
 ///
-/// During a market wind-down, the TrustedLiquidator transfers users' jTokens here
-/// via `storeRedeem`. This contract redeems them for the underlying token and records
-/// the amount as claimable by the original user.
+/// During a market wind-down, the TrustedLiquidator redeems users' jTokens for the
+/// underlying token, transfers the net amount (after the redeem fee) here, and calls
+/// `storeRedeem` to record the balance delta as claimable by the original user.
 ///
 /// Users call `claim` to withdraw their underlying before the deadline.
 /// After the deadline, the TrustedLiquidator's owner can `sweep` unclaimed funds.
@@ -33,14 +28,13 @@ contract Escrow {
     error DeadlineInPast();
     error NothingToClaim();
     error ClaimDeadlinePassed();
-    error RedeemFailed(uint256 error, address jToken);
 
     event Deposited(address indexed user, address indexed token, uint256 amount);
     event Claimed(address indexed user, address indexed token, uint256 amount);
     event Swept(address indexed token, address indexed to, uint256 amount);
     event DeadlineSet(uint256 deadline);
 
-    /// @notice The TrustedLiquidator that can deposit jTokens into this escrow.
+    /// @notice The TrustedLiquidator that can deposit underlying into this escrow.
     address public immutable TRUSTED_LIQUIDATOR;
 
     /// @notice Claimable underlying token balances per user per token.
@@ -48,6 +42,8 @@ contract Escrow {
 
     /// @notice Unix timestamp after which claims are blocked and sweep is enabled.
     uint256 public deadline;
+
+    mapping(address token => uint256) internal _reserves;
 
     /// @param trustedLiquidator Address of the TrustedLiquidator contract.
     /// @param deadline_ Unix timestamp for the claim deadline. Must be in the future.
@@ -65,25 +61,22 @@ contract Escrow {
         if (msg.sender != Ownable(TRUSTED_LIQUIDATOR).owner()) revert NotTrustedLiquidatorOwner();
     }
 
-    /// @notice Redeems jTokens for underlying and records the amount as claimable by the user.
-    /// @dev Only callable by the TrustedLiquidator. The jTokens must already be transferred
-    ///      to this contract before calling. Uses a balance snapshot to determine the exact
-    ///      amount of underlying received (handles rounding from exchange rate math).
-    /// @param jToken The jToken market to redeem from.
+    /// @notice Records newly deposited underlying as claimable by the user.
+    /// @dev Only callable by the TrustedLiquidator. The underlying must already be transferred
+    ///      to this contract before calling. Credits the balance delta since the last deposit.
+    /// @param token The underlying token that was deposited.
     /// @param user The user who will be able to claim the underlying.
-    /// @param amount The number of jTokens to redeem.
-    function storeRedeem(address jToken, address user, uint256 amount) external {
+    function storeRedeem(address token, address user) external {
         if (block.timestamp > deadline) revert ClaimDeadlinePassed();
         if (msg.sender != TRUSTED_LIQUIDATOR) revert NotTrustedLiquidator();
-        address underlying = JToken(jToken).underlying();
 
-        uint256 balance = IERC20(underlying).balanceOf(address(this));
-        uint256 err = JToken(jToken).redeem(amount);
-        if (err != 0) revert RedeemFailed(err, jToken);
-        uint256 redeemed = IERC20(underlying).balanceOf(address(this)) - balance;
+        uint256 reserve = _reserves[token];
+        uint256 balance = IERC20(token).balanceOf(address(this));
+        uint256 redeemed = balance - reserve;
 
-        claimable[user][underlying] += redeemed;
-        emit Deposited(user, underlying, redeemed);
+        _reserves[token] = balance;
+        claimable[user][token] += redeemed;
+        emit Deposited(user, token, redeemed);
     }
 
     /// @notice Allows a user to withdraw their claimable underlying tokens.
@@ -95,6 +88,7 @@ contract Escrow {
         uint256 amount = claimable[msg.sender][token];
         if (amount == 0) revert NothingToClaim();
 
+        _reserves[token] -= amount;
         claimable[msg.sender][token] = 0;
         IERC20(token).safeTransfer(msg.sender, amount);
 
@@ -108,6 +102,8 @@ contract Escrow {
     /// @param to The recipient address (e.g. protocol treasury).
     function sweep(address token, address to) external onlyTrustedLiquidatorOwner {
         if (block.timestamp <= deadline) revert DeadlineNotReached();
+
+        _reserves[token] = 0;
 
         uint256 balance = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransfer(to, balance);

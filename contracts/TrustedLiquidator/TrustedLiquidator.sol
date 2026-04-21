@@ -8,6 +8,7 @@ import {Math} from "lib/openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Multicall} from "lib/openzeppelin-contracts/contracts/utils/Multicall.sol";
 import {Ownable} from "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 import {SafeERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 
 interface JToken {
     function underlying() external view returns (address);
@@ -33,7 +34,7 @@ interface IPriceOracle {
 }
 
 interface IEscrow {
-    function storeRedeem(address jToken, address user, uint256 amount) external;
+    function storeRedeem(address token, address user) external;
 }
 
 /// @title TrustedLiquidator
@@ -46,19 +47,36 @@ interface IEscrow {
 /// - Reduced liquidation incentive via `trustedLiquidationIncentiveMantissa`
 ///
 /// All functions are owner-only. Use `multicall` to batch operations per user.
-/// This contract holds operational funds (tokens to repay borrows) but never
-/// holds user redemption funds — those go to a separate Escrow contract.
-contract TrustedLiquidator is Ownable, Multicall {
+/// This contract holds operational funds (tokens to repay borrows) and retains
+/// the configured redeem fee portion of each `transferAndRedeem` call. User
+/// redemption funds (net of fee) are forwarded to a separate Escrow contract.
+contract TrustedLiquidator is Ownable, Multicall, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    error LiquidateFailed(uint256 error, address jTokenBorrowed, address jTokenCollateral, address borrower);
-    error RedeemFailed(uint256 error, address jTokenCollateral, address redeemer);
-    error RepayBorrowFailed(uint256 error, address jToken, address borrower);
+    error LiquidateFailed(uint256 err, address jTokenBorrowed, address jTokenCollateral, address borrower);
+    error RedeemFailed(uint256 err, address jToken, address redeemer);
+    error RepayBorrowFailed(uint256 err, address jToken, address borrower);
     error RepayExceedsMax(uint256 balance, uint256 maxRepay, address jToken, address borrower);
+    error InvalidRedeemFee(uint256 redeemFee);
 
-    constructor(address owner) Ownable(owner) {}
+    uint256 internal constant BPS_BASE = 10000;
+
+    uint256 internal _redeemFee;
+
+    event RedeemFeeSet(uint256 redeemFee);
+
+    /// @param owner The initial owner with privileged access to all functions.
+    /// @param redeemFee Initial redeem fee in basis points (0-10000). Reverts if above 10000.
+    constructor(address owner, uint256 redeemFee) Ownable(owner) {
+        _setRedeemFee(redeemFee);
+    }
 
     receive() external payable {}
+
+    /// @notice Returns the redeem fee in basis points (0-10000).
+    function getRedeemFee() external view returns (uint256) {
+        return _redeemFee;
+    }
 
     /// @notice Liquidates a borrower's full debt and redeems seized collateral.
     /// @dev Repays the entire borrow balance of `borrower` in `jTokenBorrowed`,
@@ -70,7 +88,7 @@ contract TrustedLiquidator is Ownable, Multicall {
     /// @param borrower The address of the borrower to liquidate.
     function liquidate(address jTokenBorrowed, address jTokenCollateral, address borrower) external onlyOwner {
         address underlying = JToken(jTokenBorrowed).underlying();
-        
+
         uint256 repay = JToken(jTokenBorrowed).borrowBalanceCurrent(borrower);
         uint256 maxRepay = _maxRepayForCollateral(jTokenBorrowed, jTokenCollateral, borrower);
         if (maxRepay == 0) return;
@@ -79,12 +97,12 @@ contract TrustedLiquidator is Ownable, Multicall {
 
         IERC20(underlying).forceApprove(jTokenBorrowed, repay);
 
-        uint256 error = JToken(jTokenBorrowed).liquidateBorrow(borrower, repay, JToken(jTokenCollateral));
-        if (error != 0) revert LiquidateFailed(error, jTokenBorrowed, jTokenCollateral, borrower);
+        uint256 err = JToken(jTokenBorrowed).liquidateBorrow(borrower, repay, JToken(jTokenCollateral));
+        if (err != 0) revert LiquidateFailed(err, jTokenBorrowed, jTokenCollateral, borrower);
 
         uint256 redeemTokens = JToken(jTokenCollateral).balanceOf(address(this));
-        error = JToken(jTokenCollateral).redeem(redeemTokens);
-        if (error != 0) revert RedeemFailed(error, jTokenCollateral, address(this));
+        err = JToken(jTokenCollateral).redeem(redeemTokens);
+        if (err != 0) revert RedeemFailed(err, jTokenCollateral, address(this));
     }
 
     /// @notice Computes the maximum repay amount that won't exceed the borrower's collateral.
@@ -117,19 +135,32 @@ contract TrustedLiquidator is Ownable, Multicall {
         maxRepay = collateralBalance * 1e18 / ratio;
     }
 
-    /// @notice Transfers a user's jTokens to the Escrow and redeems them.
+    /// @notice Pulls a user's jTokens, redeems them, deducts the redeem fee, and
+    ///         forwards the net underlying to the Escrow for later claim.
     /// @dev Uses the trusted liquidator's transferFrom bypass (no user approval needed).
-    ///      The jTokens are sent to the Escrow, which redeems them and records the
-    ///      underlying amount as claimable by the user. The underlying never passes
-    ///      through this contract.
+    ///      The jTokens are pulled into this contract and redeemed here; the redeem
+    ///      fee stays with this contract (recoverable via `transfer`) and the remainder
+    ///      is sent to the Escrow, which records it as claimable by the user.
     /// @param escrow The Escrow contract address.
     /// @param jToken The jToken market to redeem from.
     /// @param redeemer The user whose jTokens will be transferred and redeemed.
-    function transferAndRedeem(address escrow, address jToken, address redeemer) external onlyOwner {
-        uint256 balance = JToken(jToken).balanceOf(redeemer);
-        if (balance == 0) return;
-        IERC20(jToken).safeTransferFrom(redeemer, escrow, balance);
-        IEscrow(escrow).storeRedeem(jToken, redeemer, balance);
+    function transferAndRedeem(address escrow, address jToken, address redeemer) external onlyOwner nonReentrant {
+        address underlying = JToken(jToken).underlying();
+        uint256 underlyingBalance = IERC20(underlying).balanceOf(address(this));
+
+        uint256 jTokenBalance = JToken(jToken).balanceOf(redeemer);
+        if (jTokenBalance == 0) return;
+        IERC20(jToken).safeTransferFrom(redeemer, address(this), jTokenBalance);
+        uint256 err = JToken(jToken).redeem(jTokenBalance);
+        if (err != 0) revert RedeemFailed(err, jToken, redeemer);
+
+        uint256 redeemed = IERC20(underlying).balanceOf(address(this)) - underlyingBalance;
+
+        uint256 fee = redeemed * _redeemFee / BPS_BASE;
+        uint256 amount = redeemed - fee;
+        if (amount == 0) return;
+        IERC20(underlying).safeTransfer(escrow, amount);
+        IEscrow(escrow).storeRedeem(underlying, redeemer);
     }
 
     /// @notice Repays a borrower's full debt on their behalf (for bad debt cases).
@@ -149,8 +180,8 @@ contract TrustedLiquidator is Ownable, Multicall {
         address underlying = JToken(jToken).underlying();
         IERC20(underlying).forceApprove(jToken, balance);
 
-        uint256 error = JToken(jToken).repayBorrowBehalf(borrower, balance);
-        if (error != 0) revert RepayBorrowFailed(error, jToken, borrower);
+        uint256 err = JToken(jToken).repayBorrowBehalf(borrower, balance);
+        if (err != 0) revert RepayBorrowFailed(err, jToken, borrower);
     }
 
     /// @notice Transfers ERC20 tokens out of this contract.
@@ -169,5 +200,17 @@ contract TrustedLiquidator is Ownable, Multicall {
     /// @param data The calldata to execute.
     function call(address to, uint256 value, bytes calldata data) external onlyOwner {
         Address.functionCallWithValue(to, data, value);
+    }
+
+    /// @notice Sets the redeem fee in basis points. Reverts if above 10000 (100%).
+    /// @param redeemFee The redeem fee to set (0-10000).
+    function setRedeemFee(uint256 redeemFee) external onlyOwner {
+        _setRedeemFee(redeemFee);
+    }
+
+    function _setRedeemFee(uint256 redeemFee) internal {
+        if (redeemFee > BPS_BASE) revert InvalidRedeemFee(redeemFee);
+        _redeemFee = redeemFee;
+        emit RedeemFeeSet(redeemFee);
     }
 }

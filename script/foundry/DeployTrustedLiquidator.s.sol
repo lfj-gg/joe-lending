@@ -38,6 +38,7 @@ contract DeployTrustedLiquidatorScript is Script {
         address joetrollerAddr = vm.envAddress("JOETROLLER");
         uint256 deployerPrivateKey = vm.envUint("DEPLOY_PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
+        uint256 redeemFee = vm.envUint("REDEEM_FEE");
 
         address[] memory allMarkets = IJoetroller(joetrollerAddr).getAllMarkets();
 
@@ -47,7 +48,7 @@ contract DeployTrustedLiquidatorScript is Script {
         newJoetrollerDelegate = deployCode("Joetroller.sol");
         erc20Delegate = deployCode("JCollateralCapErc20Delegate.sol");
         nativeDelegate = deployCode("JWrappedNativeDelegate.sol");
-        liquidator = address(new TrustedLiquidator(deployer));
+        liquidator = address(new TrustedLiquidator(deployer, redeemFee));
         escrow = address(new Escrow(liquidator, ESCROW_DEADLINE));
 
         markets = new Market[](allMarkets.length);
