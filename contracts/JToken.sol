@@ -404,14 +404,26 @@ contract JToken is JTokenInterface, Exponential, TokenErrorReporter {
      * @param isNative The amount is in native or not
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
-    function redeemInternal(uint256 redeemTokens, bool isNative) internal nonReentrant returns (uint256) {
+    function redeemInternal(uint256 redeemTokens, bool isNative) internal returns (uint256) {
+        return redeemInternal(msg.sender, redeemTokens, isNative);
+    }
+
+    /**
+     * @notice Sender redeems jTokens in exchange for the underlying asset
+     * @dev Accrues interest whether or not the operation succeeds, unless reverted
+     * @param redeemer The address of the account which is redeeming the tokens
+     * @param redeemTokens The number of jTokens to redeem into underlying
+     * @param isNative The amount is in native or not
+     * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
+     */
+    function redeemInternal(address redeemer, uint256 redeemTokens, bool isNative) internal nonReentrant returns (uint256) {
         uint256 error = accrueInterest();
         if (error != uint256(Error.NO_ERROR)) {
             // accrueInterest emits logs on errors, but we still want to log the fact that an attempted redeem failed
             return fail(Error(error), FailureInfo.REDEEM_ACCRUE_INTEREST_FAILED);
         }
         // redeemFresh emits redeem-specific logs on errors, so we don't need to
-        return redeemFresh(msg.sender, redeemTokens, 0, isNative);
+        return redeemFresh(address(uint160(redeemer)), redeemTokens, 0, isNative);
     }
 
     /**
@@ -765,6 +777,7 @@ contract JToken is JTokenInterface, Exponential, TokenErrorReporter {
 
         /* We calculate the number of collateral tokens that will be seized */
         (uint256 amountSeizeError, uint256 seizeTokens) = joetroller.liquidateCalculateSeizeTokens(
+            liquidator,
             address(this),
             address(jTokenCollateral),
             actualRepayAmount

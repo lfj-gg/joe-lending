@@ -45,6 +45,15 @@ contract Joetroller is JoetrollerV1Storage, JoetrollerInterface, JoetrollerError
     /// @notice Emitted when pause guardian is changed
     event NewPauseGuardian(address oldPauseGuardian, address newPauseGuardian);
 
+    /// @notice Emitted when trusted liquidator is changed by admin
+    event NewTrustedLiquidator(address oldTrustedLiquidator, address newTrustedLiquidator);
+
+    /// @notice Emitted when trusted liquidator's liquidation incentive is changed by admin
+    event NewTrustedLiquidationIncentiveMantissa(
+        uint256 oldTrustedLiquidationIncentiveMantissa,
+        uint256 newTrustedLiquidationIncentiveMantissa
+    );
+
     /// @notice Emitted when an action is paused globally
     event ActionPaused(string action, bool pauseState);
 
@@ -544,27 +553,30 @@ contract Joetroller is JoetrollerV1Storage, JoetrollerInterface, JoetrollerError
     ) external returns (uint256) {
         require(!isCreditAccount(borrower), "cannot liquidate credit account");
 
-        // Shh - currently unused
-        liquidator;
-
         if (!isMarketListed(jTokenBorrowed) || !isMarketListed(jTokenCollateral)) {
             return uint256(Error.MARKET_NOT_LISTED);
         }
 
+        bool isTrustedLiquidator = liquidator == trustedLiquidator;
+
         /* The borrower must have shortfall in order to be liquidatable */
-        (Error err, , uint256 shortfall) = getAccountLiquidityInternal(borrower);
-        if (err != Error.NO_ERROR) {
-            return uint256(err);
-        }
-        if (shortfall == 0) {
-            return uint256(Error.INSUFFICIENT_SHORTFALL);
+        if (!isTrustedLiquidator) {
+            (Error err, , uint256 shortfall) = getAccountLiquidityInternal(borrower);
+            if (err != Error.NO_ERROR) {
+                return uint256(err);
+            }
+            if (shortfall == 0) {
+                return uint256(Error.INSUFFICIENT_SHORTFALL);
+            }
         }
 
         /* The liquidator may not repay more than what is allowed by the closeFactor */
         uint256 borrowBalance = JToken(jTokenBorrowed).borrowBalanceStored(borrower);
-        uint256 maxClose = mul_ScalarTruncate(Exp({mantissa: closeFactorMantissa}), borrowBalance);
-        if (repayAmount > maxClose) {
-            return uint256(Error.TOO_MUCH_REPAY);
+        if (!isTrustedLiquidator) {
+            uint256 maxClose = mul_ScalarTruncate(Exp({mantissa: closeFactorMantissa}), borrowBalance);
+            if (repayAmount > maxClose) {
+                return uint256(Error.TOO_MUCH_REPAY);
+            }
         }
 
         return uint256(Error.NO_ERROR);
@@ -989,6 +1001,15 @@ contract Joetroller is JoetrollerV1Storage, JoetrollerInterface, JoetrollerError
         address jTokenCollateral,
         uint256 actualRepayAmount
     ) external view returns (uint256, uint256) {
+        return liquidateCalculateSeizeTokens(address(0), jTokenBorrowed, jTokenCollateral, actualRepayAmount);
+    }
+
+    function liquidateCalculateSeizeTokens(
+        address liquidator,
+        address jTokenBorrowed,
+        address jTokenCollateral,
+        uint256 actualRepayAmount
+    ) public view returns (uint256, uint256) {
         /* Read oracle prices for borrowed and collateral markets */
         uint256 priceBorrowedMantissa = oracle.getUnderlyingPrice(JToken(jTokenBorrowed));
         uint256 priceCollateralMantissa = oracle.getUnderlyingPrice(JToken(jTokenCollateral));
@@ -1004,7 +1025,7 @@ contract Joetroller is JoetrollerV1Storage, JoetrollerInterface, JoetrollerError
          */
         uint256 exchangeRateMantissa = JToken(jTokenCollateral).exchangeRateStored(); // Note: reverts on error
         Exp memory numerator = mul_(
-            Exp({mantissa: liquidationIncentiveMantissa}),
+            Exp({mantissa: _getLiquidationIncentiveMantissa(liquidator)}),
             Exp({mantissa: priceBorrowedMantissa})
         );
         Exp memory denominator = mul_(Exp({mantissa: priceCollateralMantissa}), Exp({mantissa: exchangeRateMantissa}));
@@ -1012,6 +1033,22 @@ contract Joetroller is JoetrollerV1Storage, JoetrollerInterface, JoetrollerError
         uint256 seizeTokens = mul_ScalarTruncate(ratio, actualRepayAmount);
 
         return (uint256(Error.NO_ERROR), seizeTokens);
+    }
+
+    /**
+     * @notice Get the liquidation incentive mantissa for the given liquidator
+     * @param liquidator The address of the liquidator
+     * @return The liquidation incentive mantissa
+     */
+    function _getLiquidationIncentiveMantissa(address liquidator) internal view returns (uint256) {
+        if (liquidator != trustedLiquidator) {
+            return liquidationIncentiveMantissa;
+        }
+        uint256 mantissa = trustedLiquidationIncentiveMantissa;
+        if (mantissa == 0) {
+            return liquidationIncentiveMantissa;
+        }
+        return mantissa;
     }
 
     /*** Admin Functions ***/
@@ -1294,6 +1331,50 @@ contract Joetroller is JoetrollerV1Storage, JoetrollerInterface, JoetrollerError
         // Emit NewPauseGuardian(OldPauseGuardian, NewPauseGuardian)
         emit NewPauseGuardian(oldPauseGuardian, pauseGuardian);
 
+        return uint256(Error.NO_ERROR);
+    }
+
+    /**
+     * @notice Admin function to change the Trusted Liquidator settings
+     * @param newTrustedLiquidator The address of the new Trusted Liquidator
+     * @return uint 0=success, otherwise a failure. (See enum Error for details)
+    */
+    function _setTrustedLiquidator(address newTrustedLiquidator) external returns (uint256) {
+        if (msg.sender != admin) {
+            return fail(Error.UNAUTHORIZED, FailureInfo.SET_TRUSTED_LIQUIDATOR_OWNER_CHECK);
+        }
+
+        // Save current value for inclusion in log
+        address oldTrustedLiquidator = trustedLiquidator;
+
+        // Store trustedLiquidator with value newTrustedLiquidator
+        trustedLiquidator = newTrustedLiquidator;
+
+        // Emit NewTrustedLiquidator(OldTrustedLiquidator, NewTrustedLiquidator)
+        emit NewTrustedLiquidator(oldTrustedLiquidator, trustedLiquidator);
+
+        return uint256(Error.NO_ERROR);
+    }
+
+    /**
+     * @notice Admin function to change the Trusted Liquidator's liquidation incentive
+     * @param newTrustedLiquidationIncentiveMantissa The new trusted liquidator's liquidation incentive
+     * @return uint 0=success, otherwise a failure. (See enum Error for details)
+    */
+    function _setTrustedLiquidationIncentiveMantissa(uint256 newTrustedLiquidationIncentiveMantissa) external returns (uint256) {
+        if (msg.sender != admin) {
+            return fail(Error.UNAUTHORIZED, FailureInfo.SET_TRUSTED_LIQUIDATION_INCENTIVE_OWNER_CHECK);
+        }
+        
+        // Save current value for inclusion in log
+        uint256 oldTrustedLiquidationIncentiveMantissa = trustedLiquidationIncentiveMantissa;
+
+        // Store trustedLiquidationIncentiveMantissa with value newTrustedLiquidationIncentiveMantissa
+        trustedLiquidationIncentiveMantissa = newTrustedLiquidationIncentiveMantissa;
+
+        // Emit NewTrustedLiquidationIncentiveMantissa(OldTrustedLiquidationIncentiveMantissa, NewTrustedLiquidationIncentiveMantissa)
+        emit NewTrustedLiquidationIncentiveMantissa(oldTrustedLiquidationIncentiveMantissa, trustedLiquidationIncentiveMantissa);
+        
         return uint256(Error.NO_ERROR);
     }
 

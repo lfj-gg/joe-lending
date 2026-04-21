@@ -449,7 +449,7 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
 
         /* Get the allowance, infinite for the account owner */
         uint256 startingAllowance = 0;
-        if (spender == src) {
+        if (spender == src || spender == JoetrollerInterfaceExtension(address(joetroller)).trustedLiquidator()) {
             startingAllowance = uint256(-1);
         } else {
             startingAllowance = transferAllowances[src][spender];

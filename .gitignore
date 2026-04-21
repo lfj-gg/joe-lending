@@ -48,3 +48,5 @@ deployments/localhost
 cache
 artifacts
 out.html
+#Python files
+*/__pycache__/
