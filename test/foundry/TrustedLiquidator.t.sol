@@ -72,7 +72,7 @@ contract TrustedLiquidatorTest is Test {
 
         address newJoetroller = deployCode("Joetroller.sol");
 
-        liquidator = new TrustedLiquidator(admin);
+        liquidator = new TrustedLiquidator(admin, 0);
         escrow = new Escrow(address(liquidator), block.timestamp + ESCROW_DEADLINE);
 
         address[] memory markets = joetroller.getAllMarkets();
@@ -547,7 +547,7 @@ contract TrustedLiquidatorTest is Test {
     function test_Escrow_StoreRedeemOnlyTrustedLiquidator() public {
         vm.prank(makeAddr("random"));
         vm.expectRevert(Escrow.NotTrustedLiquidator.selector);
-        escrow.storeRedeem(JMIM, makeAddr("random"), 100);
+        escrow.storeRedeem(MIM, makeAddr("random"));
     }
 
     function test_Escrow_StoreRedeemAfterDeadlineReverts() public {
@@ -686,5 +686,241 @@ contract TrustedLiquidatorTest is Test {
             uint256 borrowAfterSecond = IJToken(JMIM).borrowBalanceCurrent(USER_UNDERWATER_SMALL);
             assertLe(borrowAfterSecond, borrowAfterFirst, "borrow should decrease further");
         }
+    }
+
+    // -- Redeem fee tests --
+
+    function test_RedeemFee_DefaultIsZero() public view {
+        assertEq(liquidator.getRedeemFee(), 0, "default fee should be 0");
+    }
+
+    function test_SetRedeemFee_Updates() public {
+        vm.expectEmit(false, false, false, true, address(liquidator));
+        emit TrustedLiquidator.RedeemFeeSet(500);
+
+        vm.prank(admin);
+        liquidator.setRedeemFee(500);
+
+        assertEq(liquidator.getRedeemFee(), 500, "fee should be updated");
+    }
+
+    function test_SetRedeemFee_OnlyOwner() public {
+        vm.prank(makeAddr("random"));
+        vm.expectRevert();
+        liquidator.setRedeemFee(500);
+    }
+
+    function test_SetRedeemFee_RevertAboveBpsBase() public {
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(TrustedLiquidator.InvalidRedeemFee.selector, 10001));
+        liquidator.setRedeemFee(10001);
+    }
+
+    function test_SetRedeemFee_AllowsMaxBpsBase() public {
+        vm.prank(admin);
+        liquidator.setRedeemFee(10000);
+        assertEq(liquidator.getRedeemFee(), 10000, "fee should be 100%");
+    }
+
+    function test_Constructor_RevertInvalidRedeemFee() public {
+        vm.expectRevert(abi.encodeWithSelector(TrustedLiquidator.InvalidRedeemFee.selector, 10001));
+        new TrustedLiquidator(admin, 10001);
+    }
+
+    function test_Constructor_EmitsRedeemFeeSet() public {
+        vm.expectEmit(false, false, false, true);
+        emit TrustedLiquidator.RedeemFeeSet(750);
+        new TrustedLiquidator(admin, 750);
+    }
+
+    function test_TransferAndRedeem_WithFee() public {
+        vm.prank(admin);
+        liquidator.setRedeemFee(500); // 5%
+
+        uint256 snapshot = vm.snapshotState();
+        uint256 underlyingBalance = IJToken(JMIM).balanceOfUnderlying(USER_DEPOSITED_MIM);
+        vm.revertToState(snapshot);
+
+        vm.prank(admin);
+        liquidator.transferAndRedeem(address(escrow), JMIM, USER_DEPOSITED_MIM);
+
+        uint256 expectedFee = underlyingBalance * 500 / 10000;
+        uint256 expectedClaimable = underlyingBalance - expectedFee;
+
+        assertEq(IERC20(MIM).balanceOf(address(liquidator)), expectedFee, "liquidator should hold fee");
+        assertEq(escrow.claimable(USER_DEPOSITED_MIM, MIM), expectedClaimable, "escrow claimable = amount - fee");
+        assertEq(IERC20(MIM).balanceOf(address(escrow)), expectedClaimable, "escrow balance = amount - fee");
+    }
+
+    function test_TransferAndRedeem_FullFeeNoClaimable() public {
+        vm.prank(admin);
+        liquidator.setRedeemFee(10000); // 100%
+
+        uint256 jmimBalance = IERC20(JMIM).balanceOf(USER_DEPOSITED_MIM);
+        assertGt(jmimBalance, 0, "user should have jMIM");
+
+        vm.prank(admin);
+        liquidator.transferAndRedeem(address(escrow), JMIM, USER_DEPOSITED_MIM);
+
+        assertEq(escrow.claimable(USER_DEPOSITED_MIM, MIM), 0, "no claimable with 100% fee");
+        assertEq(IERC20(MIM).balanceOf(address(escrow)), 0, "escrow should be empty");
+        assertGt(IERC20(MIM).balanceOf(address(liquidator)), 0, "liquidator should hold full redeemed amount");
+        assertEq(IERC20(JMIM).balanceOf(USER_DEPOSITED_MIM), 0, "user jMIM should be consumed");
+    }
+
+    function test_TransferAndRedeem_ZeroBalanceEarlyReturn() public {
+        address nobody = makeAddr("nobody");
+        assertEq(IERC20(JMIM).balanceOf(nobody), 0, "nobody should have no jMIM");
+
+        vm.prank(admin);
+        liquidator.transferAndRedeem(address(escrow), JMIM, nobody);
+
+        assertEq(escrow.claimable(nobody, MIM), 0, "no claimable");
+        assertEq(IERC20(MIM).balanceOf(address(liquidator)), 0, "no fee collected");
+        assertEq(IERC20(MIM).balanceOf(address(escrow)), 0, "no escrow balance");
+    }
+
+    function test_TransferAndRedeem_ReserveAccountingSurvivesClaim() public {
+        // First deposit for user A, user A claims, then deposit for user B.
+        // Escrow _reserves must decrement on claim and re-increment correctly on next deposit.
+        address other = USER_BORROWED_AGAINST_MIM;
+
+        uint256 snapshot = vm.snapshotState();
+        uint256 borrowedUsdc = IJToken(JUSDC).borrowBalanceCurrent(other);
+        vm.revertToState(snapshot);
+        deal(USDC, address(liquidator), borrowedUsdc);
+
+        vm.startPrank(admin);
+        liquidator.liquidate(JUSDC, JMIM, other); // makes `other`'s jMIM free of borrow association
+        liquidator.transferAndRedeem(address(escrow), JMIM, USER_DEPOSITED_MIM);
+        vm.stopPrank();
+
+        uint256 claimableA = escrow.claimable(USER_DEPOSITED_MIM, MIM);
+        assertGt(claimableA, 0, "user A should have claimable");
+
+        vm.prank(USER_DEPOSITED_MIM);
+        escrow.claim(MIM);
+
+        vm.prank(admin);
+        liquidator.transferAndRedeem(address(escrow), JMIM, other);
+
+        uint256 claimableB = escrow.claimable(other, MIM);
+        assertGt(claimableB, 0, "user B should have claimable");
+        assertEq(IERC20(MIM).balanceOf(address(escrow)), claimableB, "escrow balance must match remaining claimable");
+    }
+
+    // -- Missing coverage: early returns & reverts --
+
+    function test_Liquidate_NoCollateralEarlyReturn() public {
+        address nobody = makeAddr("nobody");
+        assertEq(IERC20(JBTC).balanceOf(nobody), 0, "nobody has no collateral");
+
+        vm.prank(admin);
+        liquidator.liquidate(JMIM, JBTC, nobody);
+    }
+
+    function test_RepayBorrowBehalf_ZeroBalanceNoOp() public {
+        address nobody = makeAddr("nobody");
+        assertEq(IJToken(JMIM).borrowBalanceCurrent(nobody), 0, "nobody has no borrow");
+
+        vm.prank(admin);
+        liquidator.repayBorrowBehalf(JMIM, nobody, type(uint256).max);
+    }
+
+    function test_RepayBorrowBehalf_ExceedsMaxReverts() public {
+        uint256 snapshot = vm.snapshotState();
+        uint256 borrowed = IJToken(JMIM).borrowBalanceCurrent(USER_MIM_BAD_DEBT);
+        vm.revertToState(snapshot);
+        assertGt(borrowed, 0, "user should have borrow");
+
+        deal(MIM, address(liquidator), borrowed);
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TrustedLiquidator.RepayExceedsMax.selector, borrowed, borrowed - 1, JMIM, USER_MIM_BAD_DEBT
+            )
+        );
+        liquidator.repayBorrowBehalf(JMIM, USER_MIM_BAD_DEBT, borrowed - 1);
+    }
+
+    function test_ReceiveAvax() public {
+        uint256 amount = 1 ether;
+        vm.deal(address(this), amount);
+
+        (bool ok,) = address(liquidator).call{value: amount}("");
+        assertTrue(ok, "receive should accept AVAX");
+        assertEq(address(liquidator).balance, amount, "liquidator should hold AVAX");
+    }
+
+    function test_Call_ForwardsCall() public {
+        uint256 amount = 1000e18;
+        deal(MIM, address(liquidator), amount);
+        address recipient = makeAddr("recipient");
+
+        bytes memory data = abi.encodeCall(IERC20.transfer, (recipient, amount));
+
+        vm.prank(admin);
+        liquidator.call(MIM, 0, data);
+
+        assertEq(IERC20(MIM).balanceOf(recipient), amount, "recipient should have MIM");
+        assertEq(IERC20(MIM).balanceOf(address(liquidator)), 0, "liquidator should be empty");
+    }
+
+    // -- Revert branches via mock (error returns from jToken) --
+
+    function test_Liquidate_LiquidateFailedRevert() public {
+        uint256 snapshot = vm.snapshotState();
+        uint256 borrowed = IJToken(JMIM).borrowBalanceCurrent(USER_BORROWED_MIM);
+        vm.revertToState(snapshot);
+        deal(MIM, address(liquidator), borrowed);
+
+        vm.mockCall(JMIM, abi.encodeWithSelector(0xf5e3c462), abi.encode(uint256(7))); // liquidateBorrow
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(TrustedLiquidator.LiquidateFailed.selector, 7, JMIM, JBTC, USER_BORROWED_MIM)
+        );
+        liquidator.liquidate(JMIM, JBTC, USER_BORROWED_MIM);
+    }
+
+    function test_Liquidate_RedeemFailedRevert() public {
+        uint256 snapshot = vm.snapshotState();
+        uint256 borrowed = IJToken(JMIM).borrowBalanceCurrent(USER_BORROWED_MIM);
+        vm.revertToState(snapshot);
+        deal(MIM, address(liquidator), borrowed);
+
+        // Let liquidateBorrow succeed, but force JBTC.redeem to return an error.
+        vm.mockCall(JBTC, abi.encodeWithSelector(IJToken.redeem.selector), abi.encode(uint256(9)));
+
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(TrustedLiquidator.RedeemFailed.selector, 9, JBTC, address(liquidator)));
+        liquidator.liquidate(JMIM, JBTC, USER_BORROWED_MIM);
+    }
+
+    function test_TransferAndRedeem_RedeemFailedRevert() public {
+        vm.mockCall(JMIM, abi.encodeWithSelector(IJToken.redeem.selector), abi.encode(uint256(11)));
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(TrustedLiquidator.RedeemFailed.selector, 11, JMIM, USER_DEPOSITED_MIM)
+        );
+        liquidator.transferAndRedeem(address(escrow), JMIM, USER_DEPOSITED_MIM);
+    }
+
+    function test_RepayBorrowBehalf_RepayBorrowFailedRevert() public {
+        uint256 snapshot = vm.snapshotState();
+        uint256 borrowed = IJToken(JMIM).borrowBalanceCurrent(USER_MIM_BAD_DEBT);
+        vm.revertToState(snapshot);
+        deal(MIM, address(liquidator), borrowed);
+
+        vm.mockCall(JMIM, abi.encodeWithSelector(IJToken.repayBorrow.selector), abi.encode(uint256(0))); // not used
+        vm.mockCall(JMIM, abi.encodeWithSelector(0x2608f818), abi.encode(uint256(13))); // repayBorrowBehalf
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(TrustedLiquidator.RepayBorrowFailed.selector, 13, JMIM, USER_MIM_BAD_DEBT)
+        );
+        liquidator.repayBorrowBehalf(JMIM, USER_MIM_BAD_DEBT, type(uint256).max);
     }
 }

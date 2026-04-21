@@ -8,6 +8,7 @@ Scripts for winding down Banker Joe lending markets. Run in order.
 GRAPH_API_KEY=...                # The Graph API key (for subgraph queries)
 DEPLOY_PRIVATE_KEY=...           # Deployer private key (for on-chain execution)
 TRUSTED_LIQUIDATION_PREMIUM=...  # e.g. 1.01 (1%)
+REDEEM_FEE=...                   # Wind-down redeem fee in BPS (0-10000), e.g. 50 (0.5%)
 ```
 
 Store these in `.env` at the project root.
@@ -50,11 +51,21 @@ npx hardhat dashboard --network avalanche
 Deploys contracts, funds the liquidator, and executes the full action plan on a local Anvil fork.
 
 ```bash
-./script/e2e-wind-down.sh MIM
+./script/e2e-wind-down-testnet.sh MIM
 ```
 
 Options:
 
-- `./script/e2e-wind-down.sh MIM <START_BATCH>` — resume from a specific batch
-- `./script/e2e-wind-down.sh MIM <START_BATCH> <RPC_URL>` — custom fork RPC
+- `./script/e2e-wind-down-testnet.sh MIM <START_BATCH>` — resume from a specific batch
+- `./script/e2e-wind-down-testnet.sh MIM <START_BATCH> <RPC_URL>` — custom fork RPC
+
+## 5. Execute on mainnet
+
+For production runs against a live RPC (after contracts are already deployed and funded):
+
+```bash
+./script/execute-wind-down.sh MIM <RPC_URL>
+```
+
+Requires `TRUSTED_LIQUIDATOR` and `ESCROW` env vars set to the deployed addresses.
 
