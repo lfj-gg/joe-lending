@@ -7,9 +7,9 @@ if [ -f .env ]; then
 fi
 
 # E2E market wind-down test on an Anvil fork.
-# Usage: ./script/e2e-wind-down.sh <ASSET> [FORK_RPC] [START_BATCH]
-# Example: ./script/e2e-wind-down.sh MIM
-# Restart from batch 5: ./script/e2e-wind-down.sh MIM https://api.avax.network/ext/bc/C/rpc 5
+# Usage: ./script/e2e-wind-down-testnet.sh <ASSET> [START_BATCH] [FORK_RPC]
+# Example: ./script/e2e-wind-down-testnet.sh MIM
+# Restart from batch 5: ./script/e2e-wind-down-testnet.sh MIM 5
 #
 # If Anvil is already running on the port, the script reuses it (no restart).
 # This lets you fix issues and re-run from the failed batch without losing state.

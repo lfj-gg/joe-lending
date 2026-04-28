@@ -48,5 +48,11 @@ deployments/localhost
 cache
 artifacts
 out.html
+#Foundry build artifacts
+out/
 #Python files
 */__pycache__/
+#Wind-down working files
+*-user-positions.csv
+*-action-plan.json
+escrow.json

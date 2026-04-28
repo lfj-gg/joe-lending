@@ -42,6 +42,8 @@ Joetroller._setTrustedLiquidationIncentiveMantissa(1.01e18)  // 1% penalty
 
 If unset (zero), the global `liquidationIncentiveMantissa` is used as fallback. Set this before executing the close and leave it in place — it only applies to the TrustedLiquidator.
 
+Phantom debt and bad debt are handled off-chain — see `classifier.ipynb` for the per-user redemption haircut calculation.
+
 ### 1. Pause the market
 
 Prevent new positions from being opened:
@@ -95,7 +97,7 @@ The classifier runs iteratively per user — a single user may generate multiple
 
 **Output:**
 - Console summary with funding needed and bad debt per asset
-- `{symbol}-action-plan.json` — JSON consumed by `e2e-wind-down.sh` with resolved addresses and batched actions
+- `{symbol}-action-plan.json` — JSON consumed by `e2e-wind-down-testnet.sh` and `execute-wind-down.sh` with resolved addresses and batched actions
 
 **Review the plan** before proceeding, especially any `unknown` action errors.
 
@@ -122,14 +124,22 @@ The liquidator needs these tokens because:
 ### 6. Execute the close
 
 ```bash
-./script/e2e-wind-down.sh MIM
+./script/e2e-wind-down-testnet.sh MIM
 ```
 
 Deploys contracts, funds the TrustedLiquidator, and executes the full action plan on a local Anvil fork. Each batch is sent as a single `multicall(bytes[])` transaction.
 
 Options:
-- `./script/e2e-wind-down.sh MIM <START_BATCH>` — resume from a specific batch
-- `./script/e2e-wind-down.sh MIM <START_BATCH> <RPC_URL>` — custom fork RPC
+- `./script/e2e-wind-down-testnet.sh MIM <START_BATCH>` — resume from a specific batch
+- `./script/e2e-wind-down-testnet.sh MIM <START_BATCH> <FORK_RPC>` — custom fork RPC
+
+For production runs against a live RPC (contracts already deployed and funded):
+
+```bash
+./script/execute-wind-down.sh MIM <RPC_URL>
+```
+
+Requires `TRUSTED_LIQUIDATOR` and `ESCROW` env vars set to the deployed addresses.
 
 For REDEEM and LIQUIDATE_BORROWS_THEN_REDEEM users, `transferAndRedeem` moves their jTokens to the Escrow, which redeems them for the underlying. The underlying stays in the Escrow — users must claim it (see next step). The TrustedLiquidator never holds user funds.
 
@@ -190,7 +200,8 @@ This transfers the entire token balance of the Escrow to the specified address. 
 | Classify | `uv run script/classifier.py jMIM` | `mim-user-positions.csv` | `mim-action-plan.json` + console summary |
 | Dashboard | `npx hardhat dashboard --network avalanche` | On-chain multicall | Console tables |
 | Deploy | `forge script script/foundry/DeployTrustedLiquidator.s.sol --broadcast` | `ESCROW_DEADLINE` env var | Deploys TrustedLiquidator, Escrow, delegates |
-| E2E test | `./script/e2e-wind-down.sh MIM` | `mim-action-plan.json` | Anvil fork execution |
+| E2E test | `./script/e2e-wind-down-testnet.sh MIM` | `mim-action-plan.json` | Anvil fork execution |
+| Mainnet execute | `./script/execute-wind-down.sh MIM <RPC_URL>` | `mim-action-plan.json`, `TRUSTED_LIQUIDATOR`, `ESCROW` | Live batch execution |
 
 ## Known edge cases
 

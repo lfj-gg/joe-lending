@@ -8,6 +8,7 @@ Scripts for winding down Banker Joe lending markets. Run in order.
 GRAPH_API_KEY=...                # The Graph API key (for subgraph queries)
 DEPLOY_PRIVATE_KEY=...           # Deployer private key (for on-chain execution)
 TRUSTED_LIQUIDATION_PREMIUM=...  # e.g. 1.01 (1%)
+BLOCK=...                         # Block number to snapshot at (default: latest)
 ```
 
 Store these in `.env` at the project root.
@@ -21,6 +22,14 @@ uv run script/snapshot.py jMIM
 ```
 
 Outputs `mim-user-positions.csv`.
+
+To snapshot the union of users across every market (subgraph query per market, deduped), pass `all`:
+
+```bash
+uv run script/snapshot.py all
+```
+
+Outputs `all-user-positions.csv` and runs the `sum(balanceOf) vs totalSupply()` / `sum(borrow) vs totalBorrows()` sanity check for every market — useful for sizing phantom-debt across the protocol.
 
 ## 2. Classify and generate action plan
 
@@ -50,11 +59,20 @@ npx hardhat dashboard --network avalanche
 Deploys contracts, funds the liquidator, and executes the full action plan on a local Anvil fork.
 
 ```bash
-./script/e2e-wind-down.sh MIM
+./script/e2e-wind-down-testnet.sh MIM
 ```
 
 Options:
 
-- `./script/e2e-wind-down.sh MIM <START_BATCH>` — resume from a specific batch
-- `./script/e2e-wind-down.sh MIM <START_BATCH> <RPC_URL>` — custom fork RPC
+- `./script/e2e-wind-down-testnet.sh MIM <START_BATCH>` — resume from a specific batch
+- `./script/e2e-wind-down-testnet.sh MIM <START_BATCH> <RPC_URL>` — custom fork RPC
 
+## 5. Execute on mainnet
+
+For production runs against a live RPC (after contracts are already deployed and funded):
+
+```bash
+./script/execute-wind-down.sh MIM <RPC_URL>
+```
+
+Requires `TRUSTED_LIQUIDATOR` and `ESCROW` env vars set to the deployed addresses.
