@@ -325,61 +325,62 @@ contract JToken is JTokenInterface, Exponential, TokenErrorReporter {
      *   up to the current timestamp and writes new checkpoint to storage.
      */
     function accrueInterest() public returns (uint256) {
-        /* Remember the initial block timestamp */
-        uint256 currentBlockTimestamp = getBlockTimestamp();
-        uint256 accrualBlockTimestampPrior = accrualBlockTimestamp;
-
-        /* Short-circuit accumulating 0 interest */
-        if (accrualBlockTimestampPrior == currentBlockTimestamp) {
-            return uint256(Error.NO_ERROR);
-        }
-
-        /* Read the previous values out of storage */
-        uint256 cashPrior = getCashPrior();
-        uint256 borrowsPrior = totalBorrows;
-        uint256 reservesPrior = totalReserves;
-        uint256 borrowIndexPrior = borrowIndex;
-
-        /* Calculate the current borrow interest rate */
-        uint256 borrowRateMantissa = interestRateModel.getBorrowRate(cashPrior, borrowsPrior, reservesPrior);
-        require(borrowRateMantissa <= borrowRateMaxMantissa, "borrow rate is absurdly high");
-
-        /* Calculate the number of seconds elapsed since the last accrual */
-        uint256 timestampDelta = sub_(currentBlockTimestamp, accrualBlockTimestampPrior);
-
-        /*
-         * Calculate the interest accumulated into borrows and reserves and the new index:
-         *  simpleInterestFactor = borrowRate * timestampDelta
-         *  interestAccumulated = simpleInterestFactor * totalBorrows
-         *  totalBorrowsNew = interestAccumulated + totalBorrows
-         *  totalReservesNew = interestAccumulated * reserveFactor + totalReserves
-         *  borrowIndexNew = simpleInterestFactor * borrowIndex + borrowIndex
-         */
-
-        Exp memory simpleInterestFactor = mul_(Exp({mantissa: borrowRateMantissa}), timestampDelta);
-        uint256 interestAccumulated = mul_ScalarTruncate(simpleInterestFactor, borrowsPrior);
-        uint256 totalBorrowsNew = add_(interestAccumulated, borrowsPrior);
-        uint256 totalReservesNew = mul_ScalarTruncateAddUInt(
-            Exp({mantissa: reserveFactorMantissa}),
-            interestAccumulated,
-            reservesPrior
-        );
-        uint256 borrowIndexNew = mul_ScalarTruncateAddUInt(simpleInterestFactor, borrowIndexPrior, borrowIndexPrior);
-
-        /////////////////////////
-        // EFFECTS & INTERACTIONS
-        // (No safe failures beyond this point)
-
-        /* We write the previously calculated values into storage */
-        accrualBlockTimestamp = currentBlockTimestamp;
-        borrowIndex = borrowIndexNew;
-        totalBorrows = totalBorrowsNew;
-        totalReserves = totalReservesNew;
-
-        /* We emit an AccrueInterest event */
-        emit AccrueInterest(cashPrior, interestAccumulated, borrowIndexNew, totalBorrowsNew);
-
         return uint256(Error.NO_ERROR);
+        // /* Remember the initial block timestamp */
+        // uint256 currentBlockTimestamp = getBlockTimestamp();
+        // uint256 accrualBlockTimestampPrior = accrualBlockTimestamp;
+
+        // /* Short-circuit accumulating 0 interest */
+        // if (accrualBlockTimestampPrior == currentBlockTimestamp) {
+        //     return uint256(Error.NO_ERROR);
+        // }
+
+        // /* Read the previous values out of storage */
+        // uint256 cashPrior = getCashPrior();
+        // uint256 borrowsPrior = totalBorrows;
+        // uint256 reservesPrior = totalReserves;
+        // uint256 borrowIndexPrior = borrowIndex;
+
+        // /* Calculate the current borrow interest rate */
+        // uint256 borrowRateMantissa = interestRateModel.getBorrowRate(cashPrior, borrowsPrior, reservesPrior);
+        // require(borrowRateMantissa <= borrowRateMaxMantissa, "borrow rate is absurdly high");
+
+        // /* Calculate the number of seconds elapsed since the last accrual */
+        // uint256 timestampDelta = sub_(currentBlockTimestamp, accrualBlockTimestampPrior);
+
+        // /*
+        //  * Calculate the interest accumulated into borrows and reserves and the new index:
+        //  *  simpleInterestFactor = borrowRate * timestampDelta
+        //  *  interestAccumulated = simpleInterestFactor * totalBorrows
+        //  *  totalBorrowsNew = interestAccumulated + totalBorrows
+        //  *  totalReservesNew = interestAccumulated * reserveFactor + totalReserves
+        //  *  borrowIndexNew = simpleInterestFactor * borrowIndex + borrowIndex
+        //  */
+
+        // Exp memory simpleInterestFactor = mul_(Exp({mantissa: borrowRateMantissa}), timestampDelta);
+        // uint256 interestAccumulated = mul_ScalarTruncate(simpleInterestFactor, borrowsPrior);
+        // uint256 totalBorrowsNew = add_(interestAccumulated, borrowsPrior);
+        // uint256 totalReservesNew = mul_ScalarTruncateAddUInt(
+        //     Exp({mantissa: reserveFactorMantissa}),
+        //     interestAccumulated,
+        //     reservesPrior
+        // );
+        // uint256 borrowIndexNew = mul_ScalarTruncateAddUInt(simpleInterestFactor, borrowIndexPrior, borrowIndexPrior);
+
+        // /////////////////////////
+        // // EFFECTS & INTERACTIONS
+        // // (No safe failures beyond this point)
+
+        // /* We write the previously calculated values into storage */
+        // accrualBlockTimestamp = currentBlockTimestamp;
+        // borrowIndex = borrowIndexNew;
+        // totalBorrows = totalBorrowsNew;
+        // totalReserves = totalReservesNew;
+
+        // /* We emit an AccrueInterest event */
+        // emit AccrueInterest(cashPrior, interestAccumulated, borrowIndexNew, totalBorrowsNew);
+
+        // return uint256(Error.NO_ERROR);
     }
 
     /**
