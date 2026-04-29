@@ -70,7 +70,7 @@ contract TrustedLiquidator is Ownable, Multicall {
     /// @param borrower The address of the borrower to liquidate.
     function liquidate(address jTokenBorrowed, address jTokenCollateral, address borrower) external onlyOwner {
         address underlying = JToken(jTokenBorrowed).underlying();
-        
+
         uint256 repay = JToken(jTokenBorrowed).borrowBalanceCurrent(borrower);
         uint256 maxRepay = _maxRepayForCollateral(jTokenBorrowed, jTokenCollateral, borrower);
         if (maxRepay == 0) return;

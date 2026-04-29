@@ -48,8 +48,9 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function mint(uint256 mintAmount) external returns (uint256) {
-        (uint256 err, ) = mintInternal(mintAmount, false);
-        return err;
+        revert("wind down");
+        // (uint256 err, ) = mintInternal(mintAmount, false);
+        // return err;
     }
 
     /**
@@ -59,7 +60,8 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function redeem(uint256 redeemTokens) external returns (uint256) {
-        return redeemInternal(redeemTokens, false);
+        revert("wind down");
+        // return redeemInternal(redeemTokens, false);
     }
 
     /**
@@ -69,7 +71,8 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function redeemUnderlying(uint256 redeemAmount) external returns (uint256) {
-        return redeemUnderlyingInternal(redeemAmount, false);
+        revert("wind down");
+        // return redeemUnderlyingInternal(redeemAmount, false);
     }
 
     /**
@@ -78,7 +81,8 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function borrow(uint256 borrowAmount) external returns (uint256) {
-        return borrowInternal(borrowAmount, false);
+        revert("wind down");
+        // return borrowInternal(borrowAmount, false);
     }
 
     /**
@@ -87,8 +91,9 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function repayBorrow(uint256 repayAmount) external returns (uint256) {
-        (uint256 err, ) = repayBorrowInternal(repayAmount, false);
-        return err;
+        revert("wind down");
+        // (uint256 err, ) = repayBorrowInternal(repayAmount, false);
+        // return err;
     }
 
     /**
@@ -98,8 +103,9 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function repayBorrowBehalf(address borrower, uint256 repayAmount) external returns (uint256) {
-        (uint256 err, ) = repayBorrowBehalfInternal(borrower, repayAmount, false);
-        return err;
+        revert("wind down");
+        // (uint256 err, ) = repayBorrowBehalfInternal(borrower, repayAmount, false);
+        // return err;
     }
 
     /**
@@ -115,8 +121,9 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
         uint256 repayAmount,
         JTokenInterface jTokenCollateral
     ) external returns (uint256) {
-        (uint256 err, ) = liquidateBorrowInternal(borrower, repayAmount, jTokenCollateral, false);
-        return err;
+        revert("wind down");
+        // (uint256 err, ) = liquidateBorrowInternal(borrower, repayAmount, jTokenCollateral, false);
+        // return err;
     }
 
     /**
@@ -125,7 +132,8 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function _addReserves(uint256 addAmount) external returns (uint256) {
-        return _addReservesInternal(addAmount, false);
+        revert("wind down");
+        // return _addReservesInternal(addAmount, false);
     }
 
     /**
@@ -133,22 +141,24 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
      * @param newCollateralCap New collateral cap for this market. A value of 0 corresponds to no cap.
      */
     function _setCollateralCap(uint256 newCollateralCap) external {
-        require(msg.sender == admin, "only admin can set collateral cap");
+        revert("wind down");
+        // require(msg.sender == admin, "only admin can set collateral cap");
 
-        collateralCap = newCollateralCap;
-        emit NewCollateralCap(address(this), newCollateralCap);
+        // collateralCap = newCollateralCap;
+        // emit NewCollateralCap(address(this), newCollateralCap);
     }
 
     /**
      * @notice Absorb excess cash into reserves.
      */
     function gulp() external nonReentrant {
-        uint256 cashOnChain = getCashOnChain();
-        uint256 cashPrior = getCashPrior();
+        revert("wind down");
+        // uint256 cashOnChain = getCashOnChain();
+        // uint256 cashPrior = getCashPrior();
 
-        uint256 excessCash = sub_(cashOnChain, cashPrior);
-        totalReserves = add_(totalReserves, excessCash);
-        internalCash = cashOnChain;
+        // uint256 excessCash = sub_(cashOnChain, cashPrior);
+        // totalReserves = add_(totalReserves, excessCash);
+        // internalCash = cashOnChain;
     }
 
     /**
@@ -188,56 +198,57 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
         uint256 amount,
         bytes calldata data
     ) external nonReentrant returns (bool) {
-        require(amount > 0, "flashLoan amount should be greater than zero");
-        require(accrueInterest() == uint256(Error.NO_ERROR), "accrue interest failed");
-        require(
-            JoetrollerInterfaceExtension(address(joetroller)).flashloanAllowed(
-                address(this),
-                address(receiver),
-                amount,
-                data
-            ),
-            "flashloan is paused"
-        );
-        // Shh -- currently unused
-        token;
-        uint256 cashOnChainBefore = getCashOnChain();
-        uint256 cashBefore = getCashPrior();
-        require(cashBefore >= amount, "INSUFFICIENT_LIQUIDITY");
+        revert("wind down");
+        // require(amount > 0, "flashLoan amount should be greater than zero");
+        // require(accrueInterest() == uint256(Error.NO_ERROR), "accrue interest failed");
+        // require(
+        //     JoetrollerInterfaceExtension(address(joetroller)).flashloanAllowed(
+        //         address(this),
+        //         address(receiver),
+        //         amount,
+        //         data
+        //     ),
+        //     "flashloan is paused"
+        // );
+        // // Shh -- currently unused
+        // token;
+        // uint256 cashOnChainBefore = getCashOnChain();
+        // uint256 cashBefore = getCashPrior();
+        // require(cashBefore >= amount, "INSUFFICIENT_LIQUIDITY");
 
-        // 1. calculate fee, 1 bips = 1/10000
-        uint256 totalFee = this.flashFee(amount);
+        // // 1. calculate fee, 1 bips = 1/10000
+        // uint256 totalFee = this.flashFee(amount);
 
-        // 2. transfer fund to receiver
-        doTransferOut(address(uint160(address(receiver))), amount, false);
+        // // 2. transfer fund to receiver
+        // doTransferOut(address(uint160(address(receiver))), amount, false);
 
-        // 3. update totalBorrows
-        totalBorrows = add_(totalBorrows, amount);
+        // // 3. update totalBorrows
+        // totalBorrows = add_(totalBorrows, amount);
 
-        // 4. execute receiver's callback function
+        // // 4. execute receiver's callback function
 
-        require(
-            receiver.onFlashLoan(msg.sender, underlying, amount, totalFee, data) ==
-                keccak256("ERC3156FlashBorrower.onFlashLoan"),
-            "IERC3156: Callback failed"
-        );
+        // require(
+        //     receiver.onFlashLoan(msg.sender, underlying, amount, totalFee, data) ==
+        //         keccak256("ERC3156FlashBorrower.onFlashLoan"),
+        //     "IERC3156: Callback failed"
+        // );
 
-        // 5. take amount + fee from receiver, then check balance
-        uint256 repaymentAmount = add_(amount, totalFee);
-        doTransferIn(address(receiver), repaymentAmount, false);
+        // // 5. take amount + fee from receiver, then check balance
+        // uint256 repaymentAmount = add_(amount, totalFee);
+        // doTransferIn(address(receiver), repaymentAmount, false);
 
-        uint256 cashOnChainAfter = getCashOnChain();
+        // uint256 cashOnChainAfter = getCashOnChain();
 
-        require(cashOnChainAfter == add_(cashOnChainBefore, totalFee), "BALANCE_INCONSISTENT");
+        // require(cashOnChainAfter == add_(cashOnChainBefore, totalFee), "BALANCE_INCONSISTENT");
 
-        // 6. update reserves and internal cash and totalBorrows
-        uint256 reservesFee = mul_ScalarTruncate(Exp({mantissa: reserveFactorMantissa}), totalFee);
-        totalReserves = add_(totalReserves, reservesFee);
-        internalCash = add_(cashBefore, totalFee);
-        totalBorrows = sub_(totalBorrows, amount);
+        // // 6. update reserves and internal cash and totalBorrows
+        // uint256 reservesFee = mul_ScalarTruncate(Exp({mantissa: reserveFactorMantissa}), totalFee);
+        // totalReserves = add_(totalReserves, reservesFee);
+        // internalCash = add_(cashBefore, totalFee);
+        // totalBorrows = sub_(totalBorrows, amount);
 
-        emit Flashloan(address(receiver), amount, totalFee, reservesFee);
-        return true;
+        // emit Flashloan(address(receiver), amount, totalFee, reservesFee);
+        // return true;
     }
 
     /**
@@ -247,13 +258,14 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
      * @return The actual registered amount of collateral
      */
     function registerCollateral(address account) external returns (uint256) {
-        // Make sure accountCollateralTokens of `account` is initialized.
-        initializeAccountCollateralTokens(account);
+        revert("wind down");
+        // // Make sure accountCollateralTokens of `account` is initialized.
+        // initializeAccountCollateralTokens(account);
 
-        require(msg.sender == address(joetroller), "only joetroller may register collateral for user");
+        // require(msg.sender == address(joetroller), "only joetroller may register collateral for user");
 
-        uint256 amount = sub_(accountTokens[account], accountCollateralTokens[account]);
-        return increaseUserCollateralInternal(account, amount);
+        // uint256 amount = sub_(accountTokens[account], accountCollateralTokens[account]);
+        // return increaseUserCollateralInternal(account, amount);
     }
 
     /**
@@ -262,12 +274,13 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
      * @param account The account to unregister
      */
     function unregisterCollateral(address account) external {
-        // Make sure accountCollateralTokens of `account` is initialized.
-        initializeAccountCollateralTokens(account);
+        revert("wind down");
+        // // Make sure accountCollateralTokens of `account` is initialized.
+        // initializeAccountCollateralTokens(account);
 
-        require(msg.sender == address(joetroller), "only joetroller may unregister collateral for user");
+        // require(msg.sender == address(joetroller), "only joetroller may unregister collateral for user");
 
-        decreaseUserCollateralInternal(account, accountCollateralTokens[account]);
+        // decreaseUserCollateralInternal(account, accountCollateralTokens[account]);
     }
 
     /*** Safe Token ***/
@@ -825,16 +838,57 @@ contract JCollateralCapErc20 is JToken, JCollateralCapErc20Interface, JProtocolS
     /*** Admin Functions ***/
 
     /**
+     * @notice Burns the user's jTokens and collateral tokens.
+     * @dev Only callable by the trusted liquidator.
+     * @param user The user to burn.
+     */
+    function burn(address user) external nonReentrant {
+        require(msg.sender == JoetrollerInterfaceExtension(address(joetroller)).trustedLiquidator(), "ONLY_TL");
+
+        uint256 token = accountTokens[user];
+        uint256 collateral = accountCollateralTokens[user];
+
+        if (token > 0) {
+            accountTokens[user] = 0;
+            totalSupply = sub_(totalSupply, token);
+            emit Transfer(user, address(0), token);
+        }
+
+        if (collateral > 0) {
+            accountCollateralTokens[user] = 0;
+            totalCollateralTokens = sub_(totalCollateralTokens, collateral);
+            emit UserCollateralChanged(user, 0);
+        }
+    }
+
+    /**
+     * @notice Transfers the tokens to another address
+     * @dev Only callable by the admin.
+     * @param to The address to transfer the tokens to.
+     * @param amount The amount of tokens to transfer.
+     */
+    function sweep(address to, uint256 amount) external nonReentrant {
+        require(msg.sender == admin, "ONLY_ADMIN");
+        if (amount == 0) {
+            amount = getCashOnChain();
+            internalCash = amount; 
+        }
+        doTransferOut(address(uint160(to)), amount, false);
+        emit Swept(to, amount);
+    }
+
+    /**
      * @notice Accrues interest and sets a new collateral seize share for the protocol using _setProtocolSeizeShareFresh
      * @dev Admin function to accrue interest and set a new collateral seize share
      * @return uint256 0=success, otherwise a failure (see ErrorReport.sol for details)
      */
     function _setProtocolSeizeShare(uint256 newProtocolSeizeShareMantissa) external nonReentrant returns (uint256) {
-        uint256 error = accrueInterest();
-        if (error != uint256(Error.NO_ERROR)) {
-            return fail(Error(error), FailureInfo.SET_PROTOCOL_SEIZE_SHARE_ACCRUE_INTEREST_FAILED);
-        }
-        return _setProtocolSeizeShareFresh(newProtocolSeizeShareMantissa);
+        revert("wind down");
+        // uint256 error = accrueInterest();
+        // if (error != uint256(Error.NO_ERROR)) {
+        //     return fail(Error(error), FailureInfo.SET_PROTOCOL_SEIZE_SHARE_ACCRUE_INTEREST_FAILED);
+        // }
+        // return _setProtocolSeizeShareFresh(newProtocolSeizeShareMantissa);
     }
 
     function _setProtocolSeizeShareFresh(uint256 newProtocolSeizeShareMantissa) internal returns (uint256) {

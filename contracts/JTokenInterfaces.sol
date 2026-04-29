@@ -369,6 +369,11 @@ contract JWrappedNativeInterface is JErc20Interface {
      */
     event Flashloan(address indexed receiver, uint256 amount, uint256 totalFee, uint256 reservesFee);
 
+    /**
+     * @notice Event emitted when tokens are swept
+     */
+    event Swept(address to, uint256 amount);
+
     /*** User Interface ***/
 
     function mintNative() external payable returns (uint256);
@@ -428,6 +433,11 @@ contract JCollateralCapErc20Interface is JCapableErc20Interface, JCollateralCapS
      * @notice Event emitted when user collateral is changed
      */
     event UserCollateralChanged(address account, uint256 newCollateralTokens);
+
+    /**
+     * @notice Event emitted when tokens are swept
+     */
+    event Swept(address to, uint256 amount);
 
     /*** User Interface ***/
 

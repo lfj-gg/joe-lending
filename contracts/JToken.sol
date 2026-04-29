@@ -67,7 +67,8 @@ contract JToken is JTokenInterface, Exponential, TokenErrorReporter {
      * @return Whether or not the transfer succeeded
      */
     function transfer(address dst, uint256 amount) external nonReentrant returns (bool) {
-        return transferTokens(msg.sender, msg.sender, dst, amount) == uint256(Error.NO_ERROR);
+        revert("wind down");
+        // return transferTokens(msg.sender, msg.sender, dst, amount) == uint256(Error.NO_ERROR);
     }
 
     /**
@@ -82,7 +83,8 @@ contract JToken is JTokenInterface, Exponential, TokenErrorReporter {
         address dst,
         uint256 amount
     ) external nonReentrant returns (bool) {
-        return transferTokens(msg.sender, src, dst, amount) == uint256(Error.NO_ERROR);
+        revert("wind down");
+        // return transferTokens(msg.sender, src, dst, amount) == uint256(Error.NO_ERROR);
     }
 
     /**
@@ -822,7 +824,8 @@ contract JToken is JTokenInterface, Exponential, TokenErrorReporter {
         address borrower,
         uint256 seizeTokens
     ) external nonReentrant returns (uint256) {
-        return seizeInternal(msg.sender, liquidator, borrower, seizeTokens);
+        revert("wind down");
+        // return seizeInternal(msg.sender, liquidator, borrower, seizeTokens);
     }
 
     /*** Admin Functions ***/

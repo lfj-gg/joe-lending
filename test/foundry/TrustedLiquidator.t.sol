@@ -66,29 +66,21 @@ contract TrustedLiquidatorTest is Test {
     uint256 public constant ESCROW_DEADLINE = 365 days;
 
     function setUp() public {
-        vm.createSelectFork(StdChains.getChain("avalanche").rpcUrl, 80524427);
+        // Block 81175402 is after the trustedLiquidator-aware Joetroller and
+        // delegates were deployed on-chain but before the jMIM wind-down ran,
+        // so jMIM users still have the live positions these tests reference.
+        // We skip the local re-upgrade entirely — `deployCode` would otherwise
+        // pick up the wind-down sources sitting in this branch, which revert
+        // on every user-facing entry point.
+        vm.createSelectFork(StdChains.getChain("avalanche").rpcUrl, 81175402);
 
         admin = joetroller.admin();
-
-        address newJoetroller = deployCode("Joetroller.sol");
 
         liquidator = new TrustedLiquidator(admin);
         escrow = new Escrow(address(liquidator), block.timestamp + ESCROW_DEADLINE);
 
-        address[] memory markets = joetroller.getAllMarkets();
-
-        vm.startPrank(admin);
-        joetroller._setPendingImplementation(newJoetroller);
-        IJoetroller(newJoetroller)._become(address(joetroller));
+        vm.prank(admin);
         joetroller._setTrustedLiquidator(address(liquidator));
-
-        address erc20Delegate = deployCode("JCollateralCapErc20Delegate.sol");
-        address nativeDelegate = deployCode("JWrappedNativeDelegate.sol");
-        for (uint256 i = 0; i < markets.length; i++) {
-            address impl = markets[i] == JAVAX ? nativeDelegate : erc20Delegate;
-            IJToken(markets[i])._setImplementation(impl, false, "");
-        }
-        vm.stopPrank();
     }
 
     // -- TrustedLiquidator functional tests --
@@ -154,11 +146,6 @@ contract TrustedLiquidatorTest is Test {
         IERC20(USDT).approve(JUSDT, usdtAmount);
         IJToken(JUSDT).mint(usdtAmount);
         vm.stopPrank();
-
-        // Upgrade JUSDT delegate too
-        address newJusdt = deployCode("JCollateralCapErc20Delegate.sol");
-        vm.prank(admin);
-        IJToken(JUSDT)._setImplementation(newJusdt, false, "");
 
         vm.startPrank(admin);
         liquidator.transferAndRedeem(address(escrow), JMIM, user);

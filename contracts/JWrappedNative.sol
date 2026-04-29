@@ -59,8 +59,9 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function mint(uint256 mintAmount) external returns (uint256) {
-        (uint256 err, ) = mintInternal(mintAmount, false);
-        require(err == 0, "mint failed");
+        revert("wind down");
+        // (uint256 err, ) = mintInternal(mintAmount, false);
+        // require(err == 0, "mint failed");
     }
 
     /**
@@ -70,8 +71,9 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function mintNative() external payable returns (uint256) {
-        (uint256 err, ) = mintInternal(msg.value, true);
-        require(err == 0, "mint native failed");
+        revert("wind down");
+        // (uint256 err, ) = mintInternal(msg.value, true);
+        // require(err == 0, "mint native failed");
     }
 
     /**
@@ -82,7 +84,8 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function redeem(uint256 redeemTokens) external returns (uint256) {
-        require(redeemInternal(redeemTokens, false) == 0, "redeem failed");
+        revert("wind down");
+        // require(redeemInternal(redeemTokens, false) == 0, "redeem failed");
     }
 
     /**
@@ -93,7 +96,8 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function redeemNative(uint256 redeemTokens) external returns (uint256) {
-        require(redeemInternal(redeemTokens, true) == 0, "redeem native failed");
+        revert("wind down");
+        // require(redeemInternal(redeemTokens, true) == 0, "redeem native failed");
     }
 
     /**
@@ -104,7 +108,8 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function redeemUnderlying(uint256 redeemAmount) external returns (uint256) {
-        require(redeemUnderlyingInternal(redeemAmount, false) == 0, "redeem underlying failed");
+        revert("wind down");
+        // require(redeemUnderlyingInternal(redeemAmount, false) == 0, "redeem underlying failed");
     }
 
     /**
@@ -115,7 +120,8 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function redeemUnderlyingNative(uint256 redeemAmount) external returns (uint256) {
-        require(redeemUnderlyingInternal(redeemAmount, true) == 0, "redeem underlying native failed");
+        revert("wind down");
+        // require(redeemUnderlyingInternal(redeemAmount, true) == 0, "redeem underlying native failed");
     }
 
     /**
@@ -126,7 +132,8 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function borrow(uint256 borrowAmount) external returns (uint256) {
-        require(borrowInternal(borrowAmount, false) == 0, "borrow failed");
+        revert("wind down");
+        // require(borrowInternal(borrowAmount, false) == 0, "borrow failed");
     }
 
     /**
@@ -137,7 +144,8 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function borrowNative(uint256 borrowAmount) external returns (uint256) {
-        require(borrowInternal(borrowAmount, true) == 0, "borrow native failed");
+        revert("wind down");
+        // require(borrowInternal(borrowAmount, true) == 0, "borrow native failed");
     }
 
     /**
@@ -148,8 +156,9 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function repayBorrow(uint256 repayAmount) external returns (uint256) {
-        (uint256 err, ) = repayBorrowInternal(repayAmount, false);
-        require(err == 0, "repay failed");
+        revert("wind down");
+        // (uint256 err, ) = repayBorrowInternal(repayAmount, false);
+        // require(err == 0, "repay failed");
     }
 
     /**
@@ -159,8 +168,9 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function repayBorrowNative() external payable returns (uint256) {
-        (uint256 err, ) = repayBorrowInternal(msg.value, true);
-        require(err == 0, "repay native failed");
+        revert("wind down");
+        // (uint256 err, ) = repayBorrowInternal(msg.value, true);
+        // require(err == 0, "repay native failed");
     }
 
     /**
@@ -170,8 +180,9 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function repayBorrowBehalf(address borrower, uint256 repayAmount) external returns (uint256) {
-        (uint256 err, ) = repayBorrowBehalfInternal(borrower, repayAmount, false);
-        require(err == 0, "repay behalf failed");
+        revert("wind down");
+        // (uint256 err, ) = repayBorrowBehalfInternal(borrower, repayAmount, false);
+        // require(err == 0, "repay behalf failed");
     }
 
     /**
@@ -180,8 +191,9 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function repayBorrowBehalfNative(address borrower) external payable returns (uint256) {
-        (uint256 err, ) = repayBorrowBehalfInternal(borrower, msg.value, true);
-        require(err == 0, "repay behalf native failed");
+        revert("wind down");
+        // (uint256 err, ) = repayBorrowBehalfInternal(borrower, msg.value, true);
+        // require(err == 0, "repay behalf native failed");
     }
 
     /**
@@ -199,8 +211,9 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
         uint256 repayAmount,
         JTokenInterface jTokenCollateral
     ) external returns (uint256) {
-        (uint256 err, ) = liquidateBorrowInternal(borrower, repayAmount, jTokenCollateral, false);
-        require(err == 0, "liquidate borrow failed");
+        revert("wind down");
+        // (uint256 err, ) = liquidateBorrowInternal(borrower, repayAmount, jTokenCollateral, false);
+        // require(err == 0, "liquidate borrow failed");
     }
 
     /**
@@ -217,8 +230,9 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
         payable
         returns (uint256)
     {
-        (uint256 err, ) = liquidateBorrowInternal(borrower, msg.value, jTokenCollateral, true);
-        require(err == 0, "liquidate borrow native failed");
+        revert("wind down");
+        // (uint256 err, ) = liquidateBorrowInternal(borrower, msg.value, jTokenCollateral, true);
+        // require(err == 0, "liquidate borrow native failed");
     }
 
     /**
@@ -258,53 +272,54 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
         uint256 amount,
         bytes calldata data
     ) external nonReentrant returns (bool) {
-        require(amount > 0, "flashLoan amount should be greater than zero");
-        require(accrueInterest() == uint256(Error.NO_ERROR), "accrue interest failed");
-        require(
-            JoetrollerInterfaceExtension(address(joetroller)).flashloanAllowed(
-                address(this),
-                address(receiver),
-                amount,
-                data
-            ),
-            "flashloan is paused"
-        );
-        // Shh -- currently unused
-        token;
-        uint256 cashBefore = getCashPrior();
-        require(cashBefore >= amount, "INSUFFICIENT_LIQUIDITY");
+        revert("wind down");
+        // require(amount > 0, "flashLoan amount should be greater than zero");
+        // require(accrueInterest() == uint256(Error.NO_ERROR), "accrue interest failed");
+        // require(
+        //     JoetrollerInterfaceExtension(address(joetroller)).flashloanAllowed(
+        //         address(this),
+        //         address(receiver),
+        //         amount,
+        //         data
+        //     ),
+        //     "flashloan is paused"
+        // );
+        // // Shh -- currently unused
+        // token;
+        // uint256 cashBefore = getCashPrior();
+        // require(cashBefore >= amount, "INSUFFICIENT_LIQUIDITY");
 
-        // 1. calculate fee, 1 bips = 1/10000
-        uint256 totalFee = this.flashFee(amount);
+        // // 1. calculate fee, 1 bips = 1/10000
+        // uint256 totalFee = this.flashFee(amount);
 
-        // 2. transfer fund to receiver
-        doTransferOut(address(uint160(address(receiver))), amount, false);
+        // // 2. transfer fund to receiver
+        // doTransferOut(address(uint160(address(receiver))), amount, false);
 
-        // 3. update totalBorrows
-        totalBorrows = add_(totalBorrows, amount);
+        // // 3. update totalBorrows
+        // totalBorrows = add_(totalBorrows, amount);
 
-        // 4. execute receiver's callback function
-        require(
-            receiver.onFlashLoan(msg.sender, underlying, amount, totalFee, data) ==
-                keccak256("ERC3156FlashBorrower.onFlashLoan"),
-            "IERC3156: Callback failed"
-        );
+        // // 4. execute receiver's callback function
+        // require(
+        //     receiver.onFlashLoan(msg.sender, underlying, amount, totalFee, data) ==
+        //         keccak256("ERC3156FlashBorrower.onFlashLoan"),
+        //     "IERC3156: Callback failed"
+        // );
 
-        // 5. take amount + fee from receiver, then check balance
-        uint256 repaymentAmount = add_(amount, totalFee);
+        // // 5. take amount + fee from receiver, then check balance
+        // uint256 repaymentAmount = add_(amount, totalFee);
 
-        doTransferIn(address(receiver), repaymentAmount, false);
+        // doTransferIn(address(receiver), repaymentAmount, false);
 
-        uint256 cashAfter = getCashPrior();
-        require(cashAfter == add_(cashBefore, totalFee), "BALANCE_INCONSISTENT");
+        // uint256 cashAfter = getCashPrior();
+        // require(cashAfter == add_(cashBefore, totalFee), "BALANCE_INCONSISTENT");
 
-        // 6. update totalReserves and totalBorrows
-        uint256 reservesFee = mul_ScalarTruncate(Exp({mantissa: reserveFactorMantissa}), totalFee);
-        totalReserves = add_(totalReserves, reservesFee);
-        totalBorrows = sub_(totalBorrows, amount);
+        // // 6. update totalReserves and totalBorrows
+        // uint256 reservesFee = mul_ScalarTruncate(Exp({mantissa: reserveFactorMantissa}), totalFee);
+        // totalReserves = add_(totalReserves, reservesFee);
+        // totalBorrows = sub_(totalBorrows, amount);
 
-        emit Flashloan(address(receiver), amount, totalFee, reservesFee);
-        return true;
+        // emit Flashloan(address(receiver), amount, totalFee, reservesFee);
+        // return true;
     }
 
     function() external payable {
@@ -319,7 +334,8 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function _addReserves(uint256 addAmount) external returns (uint256) {
-        require(_addReservesInternal(addAmount, false) == 0, "add reserves failed");
+        revert("wind down");
+        // require(_addReservesInternal(addAmount, false) == 0, "add reserves failed");
     }
 
     /**
@@ -329,7 +345,8 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function _addReservesNative() external payable returns (uint256) {
-        require(_addReservesInternal(msg.value, true) == 0, "add reserves failed");
+        revert("wind down");
+        // require(_addReservesInternal(msg.value, true) == 0, "add reserves failed");
     }
 
     /*** Safe Token ***/
@@ -742,16 +759,47 @@ contract JWrappedNative is JToken, JWrappedNativeInterface, JProtocolSeizeShareS
     /*** Admin Functions ***/
 
     /**
+     * @notice Burns the user's jTokens and collateral tokens.
+     * @dev Only callable by the trusted liquidator.
+     * @param user The user to burn.
+     */
+    function burn(address user) external nonReentrant {
+        require(msg.sender == JoetrollerInterfaceExtension(address(joetroller)).trustedLiquidator(), "ONLY_TL");
+
+        uint256 token = accountTokens[user];
+
+        if (token > 0) {
+            accountTokens[user] = 0;
+            totalSupply = sub_(totalSupply, token);
+            emit Transfer(user, address(0), token);
+        }
+    }
+
+    /**
+     * @notice Transfers the tokens to another address
+     * @dev Only callable by the admin.
+     * @param to The address to transfer the tokens to.
+     * @param amount The amount of tokens to transfer.
+     */
+    function sweep(address to, uint256 amount) external nonReentrant {
+        require(msg.sender == admin, "ONLY_ADMIN");
+        if (amount == 0) amount = getCashPrior();
+        doTransferOut(address(uint160(to)), amount, false);
+        emit Swept(to, amount);
+    }
+
+    /**
      * @notice Accrues interest and sets a new collateral seize share for the protocol using _setProtocolSeizeShareFresh
      * @dev Admin function to accrue interest and set a new collateral seize share
      * @return uint256 0=success, otherwise a failure (see ErrorReport.sol for details)
      */
     function _setProtocolSeizeShare(uint256 newProtocolSeizeShareMantissa) external nonReentrant returns (uint256) {
-        uint256 error = accrueInterest();
-        if (error != uint256(Error.NO_ERROR)) {
-            return fail(Error(error), FailureInfo.SET_PROTOCOL_SEIZE_SHARE_ACCRUE_INTEREST_FAILED);
-        }
-        return _setProtocolSeizeShareFresh(newProtocolSeizeShareMantissa);
+        revert("wind down");
+        // uint256 error = accrueInterest();
+        // if (error != uint256(Error.NO_ERROR)) {
+        //     return fail(Error(error), FailureInfo.SET_PROTOCOL_SEIZE_SHARE_ACCRUE_INTEREST_FAILED);
+        // }
+        // return _setProtocolSeizeShareFresh(newProtocolSeizeShareMantissa);
     }
 
     function _setProtocolSeizeShareFresh(uint256 newProtocolSeizeShareMantissa) internal returns (uint256) {
