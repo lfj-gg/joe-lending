@@ -47,9 +47,8 @@ contract SimpleEscrow is Ownable {
     error NothingToClaim();
     error DeadlineNotReached();
     error DeadlineInPast();
-    error InvalidToken();
 
-    event Claimed(address indexed user, address indexed token, uint256 amount);
+    event Claimed(address indexed caller, address indexed user, address indexed token, uint256 amount);
     event Swept(address indexed token, address indexed to, uint256 amount);
     event DeadlineSet(uint256 deadline);
 
@@ -112,19 +111,36 @@ contract SimpleEscrow is Ownable {
     ///      caller has no recorded claim for `token`.
     /// @param token The underlying token address to claim.
     function claim(address token) external {
+        _claim(msg.sender, token);
+    }
+
+    /// @notice Withdraws the claimable amount of `token` for `user` and zeroes
+    ///         their corresponding jToken balance via `jToken.burn`.
+    /// @dev Only callable by the owner. Same requirements as `claim` apply.
+    /// @param user The user to claim for.
+    /// @param token The underlying token address to claim.
+    function claimFor(address user, address token) external onlyOwner {
+        _claim(user, token);
+    }
+
+    /// @dev Internal function to claim for a user and token.
+    /// @param user The user to claim for.
+    /// @param token The underlying token address to claim.
+    function _claim(address user, address token) internal {
         if (block.timestamp > deadline) revert DeadlinePassed();
 
-        uint256 amount = claimable[msg.sender][token];
+        uint256 amount = claimable[user][token];
         if (amount == 0) revert NothingToClaim();
-        claimable[msg.sender][token] = 0;
+        claimable[user][token] = 0;
 
         address jToken = jTokens[token];
-        if (jToken == address(0)) revert InvalidToken();
-        JToken(jToken).burn(msg.sender);
+        if (jToken != address(0)) {
+            JToken(jToken).burn(user);
+        }
 
-        IERC20(token).safeTransfer(msg.sender, amount);
+        IERC20(token).safeTransfer(user, amount);
 
-        emit Claimed(msg.sender, token, amount);
+        emit Claimed(msg.sender, user, token, amount);
     }
 
     /// @notice Transfers the entire contract balance of `token` to `to`. Only

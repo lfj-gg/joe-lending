@@ -9,6 +9,9 @@ import {SimpleEscrow} from "../../contracts/TrustedLiquidator/SimpleEscrow.sol";
 import {WindDownTestBase, IJoetroller, IJTokenAdmin} from "./WindDownTestBase.sol";
 
 contract SimpleEscrowTest is WindDownTestBase {
+    address public constant MIM = 0x130966628846BFd36ff31a822705796e8cb8C18D;
+    address public constant JMIM = 0xcE095A9657A02025081E0607c8D8b081c76A75ea;
+
     function setUp() public {
         _fullSetup();
     }
@@ -34,6 +37,12 @@ contract SimpleEscrowTest is WindDownTestBase {
             address underlying = IJTokenAdmin(markets[i]).underlying();
             assertEq(escrow.jTokens(underlying), markets[i]);
         }
+    }
+
+    function test_Constructor_skipsDelistedMarket() public view {
+        // jMIM was already removed from `getAllMarkets()` at the fork block,
+        // so MIM must not be mapped — claims for it take the no-burn branch.
+        assertEq(escrow.jTokens(MIM), address(0));
     }
 
     function test_Constructor_setsDeadline() public view {
@@ -86,6 +95,15 @@ contract SimpleEscrowTest is WindDownTestBase {
         escrow.set(_singletonPositions(alice, USDC, 1));
     }
 
+    function test_Set_acceptsDelistedToken() public {
+        // Underlying for a market that's no longer listed must still be
+        // recordable — otherwise users of already-wound-down markets like
+        // jMIM couldn't be paid out through this escrow.
+        vm.prank(admin);
+        escrow.set(_singletonPositions(alice, MIM, 100e18));
+        assertEq(escrow.claimable(alice, MIM), 100e18);
+    }
+
     /* --------------------------------------------------------------------- */
     /* claim                                                                  */
     /* --------------------------------------------------------------------- */
@@ -118,7 +136,7 @@ contract SimpleEscrowTest is WindDownTestBase {
         _seedAndSetClaim(alice, USDC, amount);
 
         vm.expectEmit(true, true, true, true, address(escrow));
-        emit Claimed(alice, USDC, amount);
+        emit Claimed(alice, alice, USDC, amount);
 
         vm.prank(alice);
         escrow.claim(USDC);
@@ -147,19 +165,26 @@ contract SimpleEscrowTest is WindDownTestBase {
         vm.stopPrank();
     }
 
-    function test_Claim_revertsForUnknownToken() public {
-        // Admin records a position for a token whose underlying isn't in any
-        // listed market — the constructor never mapped it to a jToken. The
-        // user trips the explicit `InvalidToken` guard before the would-be
-        // zero-address burn. (No need to fund the escrow — the revert happens
-        // before the underlying transfer.)
-        address rogueToken = address(0xC0FFEE);
-        vm.prank(admin);
-        escrow.set(_singletonPositions(alice, rogueToken, 100e6));
+    function test_Claim_succeedsForDelistedToken_skipsBurn() public {
+        // MIM has no entry in `jTokens` (jMIM was delisted before the fork
+        // block), so `claim` must take the no-burn branch: transfer the
+        // underlying without touching any jToken. We assert against a real
+        // ERC20 to catch any accidental call to address(0).
+        uint256 amount = 100e18;
+        _seedAndSetClaim(alice, MIM, amount);
+
+        // Sanity: claim on a non-existent jMIM would revert with "no contract
+        // at address". jMIM does still exist on-chain at the fork block, but
+        // the wind-down delegate isn't installed there, so a successful claim
+        // proves the escrow never tried to burn on it.
+        uint256 jmimBefore = IERC20(JMIM).balanceOf(alice);
 
         vm.prank(alice);
-        vm.expectRevert(SimpleEscrow.InvalidToken.selector);
-        escrow.claim(rogueToken);
+        escrow.claim(MIM);
+
+        assertEq(escrow.claimable(alice, MIM), 0, "claimable not zeroed");
+        assertEq(IERC20(MIM).balanceOf(alice), amount, "MIM not credited");
+        assertEq(IERC20(JMIM).balanceOf(alice), jmimBefore, "jMIM should be untouched");
     }
 
     function test_Claim_succeedsAtExactDeadline() public {
@@ -170,6 +195,92 @@ contract SimpleEscrowTest is WindDownTestBase {
         vm.prank(alice);
         escrow.claim(USDC);
         assertEq(escrow.claimable(alice, USDC), 0);
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* claimFor                                                               */
+    /* --------------------------------------------------------------------- */
+
+    function test_ClaimFor_creditsUserNotCaller() public {
+        // Owner-initiated claim: underlying must land in the user's wallet,
+        // not the admin's. This is the whole point of `claimFor` — it lets
+        // the operator drain claimables without ever holding the funds.
+        uint256 amount = 250e6;
+        _seedAndSetClaim(alice, USDC, amount);
+
+        uint256 adminBefore = IERC20(USDC).balanceOf(admin);
+        uint256 aliceBefore = IERC20(USDC).balanceOf(alice);
+
+        vm.prank(admin);
+        escrow.claimFor(alice, USDC);
+
+        assertEq(escrow.claimable(alice, USDC), 0, "claimable not zeroed");
+        assertEq(IERC20(USDC).balanceOf(alice), aliceBefore + amount, "alice not credited");
+        assertEq(IERC20(USDC).balanceOf(admin), adminBefore, "admin should not receive funds");
+        assertEq(IJTokenAdmin(JUSDC).balanceOf(alice), 0, "jUSDC not burned");
+    }
+
+    function test_ClaimFor_emitsClaimedWithAdminAsCaller() public {
+        // Caller in the event is the *executor* (admin), not the recipient.
+        // Off-chain indexers rely on this distinction to tell self-claim
+        // (caller == user) from operator-initiated claim (caller == admin).
+        uint256 amount = 250e6;
+        _seedAndSetClaim(alice, USDC, amount);
+
+        vm.expectEmit(true, true, true, true, address(escrow));
+        emit Claimed(admin, alice, USDC, amount);
+
+        vm.prank(admin);
+        escrow.claimFor(alice, USDC);
+    }
+
+    function test_ClaimFor_revertsForNonOwner() public {
+        _seedAndSetClaim(alice, USDC, 250e6);
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, bob));
+        escrow.claimFor(alice, USDC);
+    }
+
+    function test_ClaimFor_revertsAfterDeadline() public {
+        _seedAndSetClaim(alice, USDC, 250e6);
+        vm.warp(deadline + 1);
+        vm.prank(admin);
+        vm.expectRevert(SimpleEscrow.DeadlinePassed.selector);
+        escrow.claimFor(alice, USDC);
+    }
+
+    function test_ClaimFor_revertsIfNothingToClaim() public {
+        vm.prank(admin);
+        vm.expectRevert(SimpleEscrow.NothingToClaim.selector);
+        escrow.claimFor(alice, USDC);
+    }
+
+    function test_ClaimFor_succeedsForDelistedToken() public {
+        // Same skip-burn semantics as `claim`: an admin-driven payout for a
+        // delisted-market underlying must succeed without touching the
+        // (possibly stale) jToken.
+        uint256 amount = 100e18;
+        _seedAndSetClaim(alice, MIM, amount);
+
+        vm.prank(admin);
+        escrow.claimFor(alice, MIM);
+
+        assertEq(escrow.claimable(alice, MIM), 0);
+        assertEq(IERC20(MIM).balanceOf(alice), amount);
+    }
+
+    function test_ClaimFor_doesNotBlockSelfClaim() public {
+        // `claim` and `claimFor` write to the same `claimable` slot; once
+        // the admin pays a user out, the user's own `claim` must hit the
+        // `NothingToClaim` revert rather than double-paying.
+        _seedAndSetClaim(alice, USDC, 250e6);
+
+        vm.prank(admin);
+        escrow.claimFor(alice, USDC);
+
+        vm.prank(alice);
+        vm.expectRevert(SimpleEscrow.NothingToClaim.selector);
+        escrow.claim(USDC);
     }
 
     /* --------------------------------------------------------------------- */
@@ -273,7 +384,7 @@ contract SimpleEscrowTest is WindDownTestBase {
     /* Events                                                                 */
     /* --------------------------------------------------------------------- */
 
-    event Claimed(address indexed user, address indexed token, uint256 amount);
+    event Claimed(address indexed caller, address indexed user, address indexed token, uint256 amount);
     event Swept(address indexed token, address indexed to, uint256 amount);
     event DeadlineSet(uint256 deadline);
 }
