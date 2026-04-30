@@ -48,7 +48,7 @@ contract SimpleEscrow is Ownable {
     error DeadlineNotReached();
     error DeadlineInPast();
 
-    event Claimed(address indexed caller, address indexed user, address indexed token, uint256 amount);
+    event Claimed(address indexed caller, address indexed token, address indexed user, address recipient, uint256 amount);
     event Swept(address indexed token, address indexed to, uint256 amount);
     event DeadlineSet(uint256 deadline);
 
@@ -111,7 +111,7 @@ contract SimpleEscrow is Ownable {
     ///      caller has no recorded claim for `token`.
     /// @param token The underlying token address to claim.
     function claim(address token) external {
-        _claim(msg.sender, token);
+        _claim(msg.sender, msg.sender, token);
     }
 
     /// @notice Withdraws the claimable amount of `token` for `user` and zeroes
@@ -119,14 +119,15 @@ contract SimpleEscrow is Ownable {
     /// @dev Only callable by the owner. Same requirements as `claim` apply.
     /// @param user The user to claim for.
     /// @param token The underlying token address to claim.
-    function claimFor(address user, address token) external onlyOwner {
-        _claim(user, token);
+    function claimFor(address user, address recipient, address token) external onlyOwner {
+        _claim(user, recipient, token);
     }
 
-    /// @dev Internal function to claim for a user and token.
+    /// @dev Internal function to claim for a user and transfer the tokens to a recipient.
     /// @param user The user to claim for.
+    /// @param recipient The recipient of the claimed tokens.
     /// @param token The underlying token address to claim.
-    function _claim(address user, address token) internal {
+    function _claim(address user, address recipient, address token) internal {
         if (block.timestamp > deadline) revert DeadlinePassed();
 
         uint256 amount = claimable[user][token];
@@ -138,9 +139,9 @@ contract SimpleEscrow is Ownable {
             JToken(jToken).burn(user);
         }
 
-        IERC20(token).safeTransfer(user, amount);
+        IERC20(token).safeTransfer(recipient, amount);
 
-        emit Claimed(msg.sender, user, token, amount);
+        emit Claimed(msg.sender, token, user, recipient, amount);
     }
 
     /// @notice Transfers the entire contract balance of `token` to `to`. Only

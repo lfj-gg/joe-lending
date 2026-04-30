@@ -136,7 +136,7 @@ contract SimpleEscrowTest is WindDownTestBase {
         _seedAndSetClaim(alice, USDC, amount);
 
         vm.expectEmit(true, true, true, true, address(escrow));
-        emit Claimed(alice, alice, USDC, amount);
+        emit Claimed(alice, USDC, alice, alice, amount);
 
         vm.prank(alice);
         escrow.claim(USDC);
@@ -201,10 +201,11 @@ contract SimpleEscrowTest is WindDownTestBase {
     /* claimFor                                                               */
     /* --------------------------------------------------------------------- */
 
-    function test_ClaimFor_creditsUserNotCaller() public {
-        // Owner-initiated claim: underlying must land in the user's wallet,
-        // not the admin's. This is the whole point of `claimFor` — it lets
-        // the operator drain claimables without ever holding the funds.
+    function test_ClaimFor_creditsRecipient() public {
+        // Owner-initiated claim with recipient == user: underlying must
+        // land in the user's wallet, not the admin's. This is the whole
+        // point of `claimFor` — operator can drain claimables without ever
+        // holding the funds.
         uint256 amount = 250e6;
         _seedAndSetClaim(alice, USDC, amount);
 
@@ -212,12 +213,34 @@ contract SimpleEscrowTest is WindDownTestBase {
         uint256 aliceBefore = IERC20(USDC).balanceOf(alice);
 
         vm.prank(admin);
-        escrow.claimFor(alice, USDC);
+        escrow.claimFor(alice, alice, USDC);
 
         assertEq(escrow.claimable(alice, USDC), 0, "claimable not zeroed");
         assertEq(IERC20(USDC).balanceOf(alice), aliceBefore + amount, "alice not credited");
         assertEq(IERC20(USDC).balanceOf(admin), adminBefore, "admin should not receive funds");
         assertEq(IJTokenAdmin(JUSDC).balanceOf(alice), 0, "jUSDC not burned");
+    }
+
+    function test_ClaimFor_redirectsToDifferentRecipient() public {
+        // Bricked-contract scenario: the user's address can't move ERC20s
+        // (e.g. an old multisig with no admin). The operator redirects the
+        // payout to a working address (treasury) but still consumes the
+        // user's claim and burns their jToken — the position is closed for
+        // the user, the funds just land elsewhere.
+        uint256 amount = 250e6;
+        _seedAndSetClaim(alice, USDC, amount);
+
+        uint256 aliceBefore = IERC20(USDC).balanceOf(alice);
+        uint256 treasuryBefore = IERC20(USDC).balanceOf(treasury);
+        assertGt(IJTokenAdmin(JUSDC).balanceOf(alice), 0, "precondition: alice has jUSDC");
+
+        vm.prank(admin);
+        escrow.claimFor(alice, treasury, USDC);
+
+        assertEq(escrow.claimable(alice, USDC), 0, "alice's claim not consumed");
+        assertEq(IERC20(USDC).balanceOf(alice), aliceBefore, "alice should not be paid");
+        assertEq(IERC20(USDC).balanceOf(treasury), treasuryBefore + amount, "treasury not credited");
+        assertEq(IJTokenAdmin(JUSDC).balanceOf(alice), 0, "alice's jUSDC must still burn");
     }
 
     function test_ClaimFor_emitsClaimedWithAdminAsCaller() public {
@@ -228,17 +251,30 @@ contract SimpleEscrowTest is WindDownTestBase {
         _seedAndSetClaim(alice, USDC, amount);
 
         vm.expectEmit(true, true, true, true, address(escrow));
-        emit Claimed(admin, alice, USDC, amount);
+        emit Claimed(admin, USDC, alice, alice, amount);
 
         vm.prank(admin);
-        escrow.claimFor(alice, USDC);
+        escrow.claimFor(alice, alice, USDC);
+    }
+
+    function test_ClaimFor_emitsClaimedWithRedirectedRecipient() public {
+        // When recipient differs from user, the event must record both so
+        // indexers can attribute who lost the claim vs. who got the funds.
+        uint256 amount = 250e6;
+        _seedAndSetClaim(alice, USDC, amount);
+
+        vm.expectEmit(true, true, true, true, address(escrow));
+        emit Claimed(admin, USDC, alice, treasury, amount);
+
+        vm.prank(admin);
+        escrow.claimFor(alice, treasury, USDC);
     }
 
     function test_ClaimFor_revertsForNonOwner() public {
         _seedAndSetClaim(alice, USDC, 250e6);
         vm.prank(bob);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, bob));
-        escrow.claimFor(alice, USDC);
+        escrow.claimFor(alice, alice, USDC);
     }
 
     function test_ClaimFor_revertsAfterDeadline() public {
@@ -246,13 +282,13 @@ contract SimpleEscrowTest is WindDownTestBase {
         vm.warp(deadline + 1);
         vm.prank(admin);
         vm.expectRevert(SimpleEscrow.DeadlinePassed.selector);
-        escrow.claimFor(alice, USDC);
+        escrow.claimFor(alice, alice, USDC);
     }
 
     function test_ClaimFor_revertsIfNothingToClaim() public {
         vm.prank(admin);
         vm.expectRevert(SimpleEscrow.NothingToClaim.selector);
-        escrow.claimFor(alice, USDC);
+        escrow.claimFor(alice, alice, USDC);
     }
 
     function test_ClaimFor_succeedsForDelistedToken() public {
@@ -263,20 +299,35 @@ contract SimpleEscrowTest is WindDownTestBase {
         _seedAndSetClaim(alice, MIM, amount);
 
         vm.prank(admin);
-        escrow.claimFor(alice, MIM);
+        escrow.claimFor(alice, alice, MIM);
 
         assertEq(escrow.claimable(alice, MIM), 0);
         assertEq(IERC20(MIM).balanceOf(alice), amount);
     }
 
+    function test_ClaimFor_redirectsDelistedTokenToRecipient() public {
+        // The redirect path also has to work when the underlying has no
+        // jToken in the map (e.g. MIM): no burn, recipient gets the funds.
+        uint256 amount = 100e18;
+        _seedAndSetClaim(alice, MIM, amount);
+
+        vm.prank(admin);
+        escrow.claimFor(alice, treasury, MIM);
+
+        assertEq(escrow.claimable(alice, MIM), 0);
+        assertEq(IERC20(MIM).balanceOf(alice), 0);
+        assertEq(IERC20(MIM).balanceOf(treasury), amount);
+    }
+
     function test_ClaimFor_doesNotBlockSelfClaim() public {
         // `claim` and `claimFor` write to the same `claimable` slot; once
-        // the admin pays a user out, the user's own `claim` must hit the
-        // `NothingToClaim` revert rather than double-paying.
+        // the admin pays a user out (here: redirected to treasury), the
+        // user's own `claim` must hit `NothingToClaim` rather than
+        // double-paying — no second payout regardless of recipient.
         _seedAndSetClaim(alice, USDC, 250e6);
 
         vm.prank(admin);
-        escrow.claimFor(alice, USDC);
+        escrow.claimFor(alice, treasury, USDC);
 
         vm.prank(alice);
         vm.expectRevert(SimpleEscrow.NothingToClaim.selector);
@@ -384,7 +435,13 @@ contract SimpleEscrowTest is WindDownTestBase {
     /* Events                                                                 */
     /* --------------------------------------------------------------------- */
 
-    event Claimed(address indexed caller, address indexed user, address indexed token, uint256 amount);
+    event Claimed(
+        address indexed caller,
+        address indexed token,
+        address indexed user,
+        address recipient,
+        uint256 amount
+    );
     event Swept(address indexed token, address indexed to, uint256 amount);
     event DeadlineSet(uint256 deadline);
 }
